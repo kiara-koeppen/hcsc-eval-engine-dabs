@@ -1,0 +1,136 @@
+# -----------------------------------------------------------------------------
+# eval_engine_before: THE CURRENT-STATE PATTERN  ⚠️  (the pain point)
+#
+# This mirrors what the HCSC team described: a notebook emits a "next phase"
+# value, and an If/else CONDITION TASK per candidate notebook checks whether
+# that value matches, routing true/false. Selection is done by BRANCHING.
+#
+#   prep_and_route ─▶ gate ─true─▶ route_exact ─true─▶ exact_matching ─▶ route_exact_att ─true─▶ model (exact+att)
+#                              │                                      └─▶ route_exact_did ─true─▶ model (exact+did)
+#                              └─▶ route_knn   ─true─▶ knn_matching   ─▶ route_knn_att   ─true─▶ model (knn+att)
+#                                                                      └─▶ route_knn_did   ─true─▶ model (knn+did)
+#
+# Look at the model layer: it is DUPLICATED under every matching branch, because
+# a converging task can't read a task value from a sibling branch that was
+# skipped. So model routing is copy-pasted per matching method => M x N tasks.
+#
+#   This demo shows just 2 matching x 2 models = 4 model tasks + 4 conditions.
+#   Their real target: ~10 matching x ~20 models = 200 model tasks + 200
+#   condition tasks, hand-wired, per study. THAT is the exponential blowup.
+#
+# Only ONE path actually executes per run; every other branch is SKIPPED
+# (you'll see grey/skipped tasks in the run graph -- wasted DAG surface area).
+#
+# Contrast with eval_engine_after, which does all of this in a flat 3-stage DAG.
+# -----------------------------------------------------------------------------
+resources:
+  jobs:
+    eval_engine_before:
+      name: "[${bundle.target}] Eval Engine - BEFORE (if-else explosion)"
+
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+        - name: study_id
+          default: "STUDY_001"      # legacy pattern handles ONE study per run
+
+      tasks:
+        # --- Feature engineering + routing decision --------------------------
+        - task_key: prep_and_route
+          notebook_task:
+            notebook_path: ../src/notebooks/_legacy/prep_and_route.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              study_id: "{{job.parameters.study_id}}"
+
+        # --- Quality gate (legitimate) ---------------------------------------
+        - task_key: gate
+          depends_on: [{ task_key: prep_and_route }]
+          condition_task:
+            op: "EQUAL_TO"
+            left: "{{tasks.prep_and_route.values.quality_passed}}"
+            right: "true"
+
+        # ====================  MATCHING SELECTION (branching)  ===============
+        - task_key: route_exact
+          depends_on: [{ task_key: gate, outcome: "true" }]
+          condition_task:
+            op: "EQUAL_TO"
+            left: "{{tasks.prep_and_route.values.chosen_matching}}"
+            right: "exact"
+        - task_key: exact_matching
+          depends_on: [{ task_key: route_exact, outcome: "true" }]
+          notebook_task:
+            notebook_path: ../src/notebooks/_legacy/exact_matching.py
+            base_parameters: { catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}" }
+
+        - task_key: route_knn
+          depends_on: [{ task_key: gate, outcome: "true" }]
+          condition_task:
+            op: "EQUAL_TO"
+            left: "{{tasks.prep_and_route.values.chosen_matching}}"
+            right: "knn"
+        - task_key: knn_matching
+          depends_on: [{ task_key: route_knn, outcome: "true" }]
+          notebook_task:
+            notebook_path: ../src/notebooks/_legacy/knn_matching.py
+            base_parameters: { catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}" }
+
+        # ========  MODEL SELECTION -- duplicated under EACH matching branch  ==
+        # (this is the part that multiplies: M matching x N models)
+
+        # ---- under exact_matching ----
+        - task_key: route_exact_att
+          depends_on: [{ task_key: exact_matching }]
+          condition_task:
+            op: "EQUAL_TO"
+            left: "{{tasks.prep_and_route.values.chosen_model}}"
+            right: "att"
+        - task_key: model_exact_att
+          depends_on: [{ task_key: route_exact_att, outcome: "true" }]
+          notebook_task:
+            notebook_path: ../src/notebooks/_legacy/run_model.py
+            base_parameters: { catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", matching_label: "exact", model_method: "att" }
+
+        - task_key: route_exact_did
+          depends_on: [{ task_key: exact_matching }]
+          condition_task:
+            op: "EQUAL_TO"
+            left: "{{tasks.prep_and_route.values.chosen_model}}"
+            right: "did"
+        - task_key: model_exact_did
+          depends_on: [{ task_key: route_exact_did, outcome: "true" }]
+          notebook_task:
+            notebook_path: ../src/notebooks/_legacy/run_model.py
+            base_parameters: { catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", matching_label: "exact", model_method: "did" }
+
+        # ---- under knn_matching (copy-paste of the same model routing) ----
+        - task_key: route_knn_att
+          depends_on: [{ task_key: knn_matching }]
+          condition_task:
+            op: "EQUAL_TO"
+            left: "{{tasks.prep_and_route.values.chosen_model}}"
+            right: "att"
+        - task_key: model_knn_att
+          depends_on: [{ task_key: route_knn_att, outcome: "true" }]
+          notebook_task:
+            notebook_path: ../src/notebooks/_legacy/run_model.py
+            base_parameters: { catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", matching_label: "knn", model_method: "att" }
+
+        - task_key: route_knn_did
+          depends_on: [{ task_key: knn_matching }]
+          condition_task:
+            op: "EQUAL_TO"
+            left: "{{tasks.prep_and_route.values.chosen_model}}"
+            right: "did"
+        - task_key: model_knn_did
+          depends_on: [{ task_key: route_knn_did, outcome: "true" }]
+          notebook_task:
+            notebook_path: ../src/notebooks/_legacy/run_model.py
+            base_parameters: { catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", matching_label: "knn", model_method: "did" }
+
+      queue:
+        enabled: true

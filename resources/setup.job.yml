@@ -1,0 +1,17 @@
+# -----------------------------------------------------------------------------
+# Setup job: one-time creation of the config table + synthetic study cohorts.
+# Run this first so the evaluation jobs have data to chew on.
+# -----------------------------------------------------------------------------
+resources:
+  jobs:
+    setup_eval_engine:
+      name: "[${bundle.target}] Eval Engine - Setup (config + synthetic data)"
+      tasks:
+        - task_key: create_config_and_data
+          notebook_task:
+            notebook_path: ../src/setup/00_create_config_and_data.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+      queue:
+        enabled: true

@@ -1,0 +1,76 @@
+# =============================================================================
+# Databricks Asset Bundle: HCSC Automated Evaluation Engine
+# =============================================================================
+# This bundle demonstrates a config-driven, scalable orchestration pattern for
+# a causal program-evaluation engine (data processing -> matching -> modeling).
+#
+# It ships TWO jobs side by side so the contrast is obvious in a demo:
+#
+#   1. eval_engine_before  -- mirrors the CURRENT-STATE pattern: an If/else
+#      condition task per candidate notebook. Adding a matching method or a
+#      model means adding a new task + a new condition + rewiring the DAG.
+#      The graph grows with every notebook you add. This is the pain point
+#      the HCSC team raised.
+#
+#   2. eval_engine_after   -- the SCALABLE pattern: a config table drives
+#      which notebook logic runs, a `for_each` task fans out over every study,
+#      and each stage is a single PARAMETERIZED dispatcher notebook. The DAG
+#      stays flat (3 stages) no matter how many methods, models, or studies
+#      you add. The only condition task left is a legitimate pass/fail data-
+#      quality GATE -- not selection routing.
+#
+# The `run_single_study` job is the per-study pipeline invoked by the
+# `for_each` task in eval_engine_after.
+#
+# Everything runs on SERVERLESS compute -- no cluster config required.
+# =============================================================================
+
+bundle:
+  name: hcsc-eval-engine
+
+include:
+  - resources/*.yml
+
+# -----------------------------------------------------------------------------
+# Variables: parameterize catalog/schema so the SAME code deploys to dev/test/prod
+# by changing only these values per target (the core value prop of DABs).
+# -----------------------------------------------------------------------------
+variables:
+  catalog:
+    description: "Unity Catalog catalog for all demo assets"
+    default: "kk_test"
+  schema:
+    description: "Schema holding config, cohorts, and results"
+    default: "eval_engine_demo"
+
+# -----------------------------------------------------------------------------
+# Targets: each target = one environment. In real use, dev/test/prod would be
+# different workspaces (different `profile`) and different catalogs/schemas.
+# Here they share the kk_test workspace but use distinct schemas so you can see
+# "deploy once, point anywhere" without standing up 3 workspaces.
+# -----------------------------------------------------------------------------
+targets:
+  dev:
+    default: true
+    mode: development         # prefixes resources with [dev <user>] and pauses schedules
+    workspace:
+      profile: kk_test
+    variables:
+      catalog: "kk_test"
+      schema: "eval_engine_demo"
+
+  test:
+    mode: development
+    workspace:
+      profile: kk_test
+    variables:
+      catalog: "kk_test"
+      schema: "eval_engine_demo_test"
+
+  prod:
+    mode: production
+    workspace:
+      profile: kk_test
+    variables:
+      catalog: "kk_test"
+      schema: "eval_engine_demo_prod"

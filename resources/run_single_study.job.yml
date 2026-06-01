@@ -1,0 +1,95 @@
+# -----------------------------------------------------------------------------
+# run_single_study: the per-study evaluation pipeline.
+#
+# This is the reusable unit invoked once per study by the `for_each` task in
+# eval_engine_after. It is also runnable on its own for a single study.
+#
+# DAG (always exactly these stages, regardless of how many methods/models exist):
+#
+#   feature_engineering ──▶ quality_gate (PASS/FAIL) ──true──▶ matching ──▶ modeling ──▶ insights
+#                                          └──false──▶ (pipeline stops; nothing downstream runs)
+#
+# The magic: `matching` and `modeling` are SINGLE dispatcher notebooks. Which
+# algorithm runs is decided by a PARAMETER (matching_method / model_method),
+# not by routing to a different task. Add a new method => add a branch inside
+# the notebook. The DAG never changes.
+# -----------------------------------------------------------------------------
+resources:
+  jobs:
+    run_single_study:
+      name: "[${bundle.target}] Eval Engine - Run Single Study"
+
+      # Job-level parameters. for_each passes one study's config into these.
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+        - name: study_id
+          default: "STUDY_001"
+        - name: feature_method
+          default: "standard"
+        - name: matching_method
+          default: "exact"
+        - name: model_method
+          default: "att"
+
+      tasks:
+        # --- Stage 1: feature engineering + data-quality gate -----------------
+        - task_key: feature_engineering
+          notebook_task:
+            notebook_path: ../src/notebooks/feature_engineering.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              study_id: "{{job.parameters.study_id}}"
+              feature_method: "{{job.parameters.feature_method}}"
+
+        # --- The ONE legitimate condition task: a binary PASS/FAIL gate -------
+        # This is what condition tasks are FOR -- gating, not dispatch.
+        - task_key: quality_gate
+          depends_on:
+            - task_key: feature_engineering
+          condition_task:
+            op: "EQUAL_TO"
+            left: "{{tasks.feature_engineering.values.quality_passed}}"
+            right: "true"
+
+        # --- Stage 2: matching (single parameterized dispatcher notebook) -----
+        - task_key: matching
+          depends_on:
+            - task_key: quality_gate
+              outcome: "true"          # only runs when the gate passes
+          notebook_task:
+            notebook_path: ../src/notebooks/matching.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              study_id: "{{job.parameters.study_id}}"
+              matching_method: "{{job.parameters.matching_method}}"
+
+        # --- Stage 3: modeling (single parameterized dispatcher notebook) -----
+        - task_key: modeling
+          depends_on:
+            - task_key: matching
+          notebook_task:
+            notebook_path: ../src/notebooks/modeling.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              study_id: "{{job.parameters.study_id}}"
+              model_method: "{{job.parameters.model_method}}"
+
+        # --- Stage 4: write insights/results ----------------------------------
+        - task_key: insights
+          depends_on:
+            - task_key: modeling
+          notebook_task:
+            notebook_path: ../src/notebooks/insights.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              study_id: "{{job.parameters.study_id}}"
+
+      queue:
+        enabled: true

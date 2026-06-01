@@ -1,0 +1,65 @@
+# -----------------------------------------------------------------------------
+# eval_engine_after: THE SCALABLE PATTERN  ✅
+#
+#   load_config ──▶ for_each(studies) ──▶ run_single_study (one run per study)
+#
+# 1. `load_config` reads the study_config table and emits the rows as a JSON
+#    array task value (`studies`).
+# 2. `run_all_studies` is a for_each task that iterates that array. Each element
+#    is one study's config. It runs them with controlled concurrency.
+# 3. For each study it triggers the `run_single_study` job, passing that study's
+#    method choices as job parameters.
+#
+# Why this scales flat:
+#   - Add a STUDY        => insert a row in study_config. DAG unchanged.
+#   - Add a MATCHING method => add a branch inside matching.py. DAG unchanged.
+#   - Add a MODEL        => add a branch inside modeling.py. DAG unchanged.
+#   - 6 studies or 6,000 studies => same 2-node parent DAG; for_each fans out.
+#
+# Compare to eval_engine_before, where each of those changes means new tasks,
+# new condition edges, and hand-wiring the graph.
+# -----------------------------------------------------------------------------
+resources:
+  jobs:
+    eval_engine_after:
+      name: "[${bundle.target}] Eval Engine - AFTER (config + for_each)"
+
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+
+      tasks:
+        # --- Read the config table, emit studies[] as a task value -----------
+        - task_key: load_config
+          notebook_task:
+            notebook_path: ../src/notebooks/load_config.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+
+        # --- Fan out: one run_single_study run per study config row ----------
+        - task_key: run_all_studies
+          depends_on:
+            - task_key: load_config
+          for_each_task:
+            # The studies[] array produced by load_config. for_each iterates it.
+            inputs: "{{tasks.load_config.values.studies}}"
+            # Run up to 5 studies in parallel. Tune to your compute budget.
+            concurrency: 5
+            task:
+              task_key: run_study
+              run_job_task:
+                job_id: ${resources.jobs.run_single_study.id}
+                # {{input}} is the current study object. Pull each field out.
+                job_parameters:
+                  catalog: "{{job.parameters.catalog}}"
+                  schema: "{{job.parameters.schema}}"
+                  study_id: "{{input.study_id}}"
+                  feature_method: "{{input.feature_method}}"
+                  matching_method: "{{input.matching_method}}"
+                  model_method: "{{input.model_method}}"
+
+      queue:
+        enabled: true
