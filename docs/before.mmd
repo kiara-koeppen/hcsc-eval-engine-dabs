@@ -1,0 +1,23 @@
+---
+title: "BEFORE — If/else condition task per notebook (current state)"
+---
+flowchart TD
+  classDef cond fill:#FDE2E2,stroke:#C0392B,color:#641E16,font-weight:bold;
+  classDef nb fill:#FFFFFF,stroke:#566573,color:#212F3D;
+  classDef ctrl fill:#FEF9E7,stroke:#B7950B,color:#7D6608;
+
+  P["prep_and_route<br/><i>emits next-phase string</i>"]:::nb --> G{{"quality_gate"}}:::cond
+  G -->|true| RE{{"route_exact"}}:::cond
+  G -->|true| RK{{"route_knn"}}:::cond
+  RE -->|true| EM["exact_matching"]:::nb
+  RK -->|true| KM["knn_matching"]:::nb
+  EM --> REA{{"route_exact_att"}}:::cond
+  EM --> RED{{"route_exact_did"}}:::cond
+  KM --> RKA{{"route_knn_att"}}:::cond
+  KM --> RKD{{"route_knn_did"}}:::cond
+  REA -->|true| MEA["model: exact + att"]:::nb
+  RED -->|true| MED["model: exact + did"]:::nb
+  RKA -->|true| MKA["model: knn + att"]:::nb
+  RKD -->|true| MKD["model: knn + did"]:::nb
+
+  N["2 matching x 2 models = 4 model tasks + 4 routing conditions.<br/>Target ~10 x ~20 = ~200 model tasks + ~200 conditions, PER STUDY.<br/>Diamonds = condition tasks. Most branches are SKIPPED every run."]:::ctrl

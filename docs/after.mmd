@@ -1,0 +1,22 @@
+---
+title: "AFTER — Config-driven dispatch + for_each (scalable)"
+---
+flowchart TD
+  classDef cond fill:#FDEBD0,stroke:#B9770E,color:#7E5109,font-weight:bold;
+  classDef nb fill:#E8F6F3,stroke:#148F77,color:#0E6251;
+  classDef ctrl fill:#EBF5FB,stroke:#2E86C1,color:#1B4F72,font-weight:bold;
+  classDef stop fill:#F2F3F4,stroke:#909497,color:#5F6A6A;
+
+  LC["load_config<br/><i>read study_config -&gt; studies[]</i>"]:::ctrl --> FE["for_each(studies)<br/>concurrency = 5"]:::ctrl
+  FE --> F
+
+  subgraph RS["run_single_study  (runs once per study)"]
+    direction LR
+    F["feature_engineering"]:::nb --> Q{{"quality_gate"}}:::cond
+    Q -->|pass| M["matching<br/><i>dispatch: exact - knn - ipw</i>"]:::nb
+    M --> MD["modeling<br/><i>dispatch: att - ate - did - gee - mixed</i>"]:::nb
+    MD --> I["insights"]:::nb
+    Q -->|fail| X["stop<br/>(study skipped)"]:::stop
+  end
+
+  N["Flat DAG, forever. Add a STUDY = one config row. Add a METHOD/MODEL = one<br/>branch inside a notebook. for_each fans out (and parallelizes) over all studies.<br/>Only ONE condition task remains: the legitimate pass/fail data-quality gate."]:::ctrl
