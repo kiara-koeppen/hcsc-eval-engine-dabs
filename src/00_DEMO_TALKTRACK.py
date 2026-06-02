@@ -224,3 +224,110 @@
 # MAGIC 4. Quick win to show: "X weeks → automated run across N studies in one job."
 # MAGIC
 # MAGIC **Repo:** https://github.com/kiara-koeppen/hcsc-eval-engine-dabs
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Appendix B: Build these jobs by hand in the Databricks UI (no DABs)
+# MAGIC
+# MAGIC This is for the working session. If Karina and Alex want to understand every moving part, or prototype before adopting bundles, here's how to build the exact same thing by clicking through the Jobs UI. The DAB version is just this captured as code so you never have to re-click it per environment.
+# MAGIC
+# MAGIC **Before you start:**
+# MAGIC
+# MAGIC - Make sure the `study_config` and `cohorts` tables exist (run the setup notebook once, or create them).
+# MAGIC - Make sure the notebooks (`load_config`, `feature_engineering`, `matching`, `modeling`, `insights`, and for the "before" job, the `_legacy` ones) are in the workspace.
+# MAGIC - Build the jobs in the order below. `run_single_study` must exist first, because the AFTER job calls it.
+# MAGIC
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### The four building blocks (you'll use these everywhere)
+# MAGIC
+# MAGIC - **Job parameters:** open the job, and in the right-hand panel click **Edit parameters**, then add key/value pairs (for example `catalog` = `kk_test`). Reference them anywhere in the job with `{{job.parameters.catalog}}`.
+# MAGIC - **Notebook task parameters:** inside a notebook task, expand **Parameters** and add key/value pairs. They arrive in the notebook as widgets, read with `dbutils.widgets.get("catalog")`.
+# MAGIC - **Task values (passing data between tasks):** in a notebook, write a value with `dbutils.jobs.taskValues.set(key="quality_passed", value="true")`. Reference it from a later task with `{{tasks.feature_engineering.values.quality_passed}}`.
+# MAGIC - **Compute:** in each task, set **Compute** to **Serverless** so you don't have to configure a cluster.
+# MAGIC
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Job 1: run_single_study (the per-study pipeline)
+# MAGIC
+# MAGIC This is the unit the AFTER job loops over. Build it first.
+# MAGIC
+# MAGIC 1. Go to **Jobs & Pipelines** in the left nav, click **Create**, then **Job**. Name it `Eval Engine - Run Single Study`.
+# MAGIC 2. In the right panel, click **Edit parameters** and add these job parameters with defaults: `catalog` = `kk_test`, `schema` = `eval_engine_demo`, `study_id` = `STUDY_001`, `feature_method` = `standard`, `matching_method` = `exact`, `model_method` = `att`.
+# MAGIC 3. **Task 1, feature_engineering.** In **Type** pick **Notebook**, set the path to the `feature_engineering` notebook, set **Compute** to **Serverless**. Under **Parameters** add: `catalog` = `{{job.parameters.catalog}}`, `schema` = `{{job.parameters.schema}}`, `study_id` = `{{job.parameters.study_id}}`, `feature_method` = `{{job.parameters.feature_method}}`. Click **Save task**. (This notebook sets the `quality_passed` task value.)
+# MAGIC 4. **Task 2, quality_gate (the pass/fail gate).** Select the `feature_engineering` node in the graph and click **+ Add task**. In **Type** pick **If/else condition**. In the first **Condition** box enter `{{tasks.feature_engineering.values.quality_passed}}`, pick the **equals** operator from the dropdown, and in the second box enter `true`. Click **Save task**.
+# MAGIC 5. **Task 3, matching.** Select the `quality_gate` node and click **+ Add task**. The **Depends on** field defaults to `quality_gate (true)`, which is what you want (only run when the gate passes). Type **Notebook**, path to the `matching` notebook, Serverless, and Parameters `catalog`, `schema`, `study_id`, plus `matching_method` = `{{job.parameters.matching_method}}`. **Save task**.
+# MAGIC 6. **Task 4, modeling.** From the `matching` node, **+ Add task**, **Depends on** `matching`. Notebook = `modeling`, Serverless, Parameters `catalog`, `schema`, `study_id`, plus `model_method` = `{{job.parameters.model_method}}`. **Save task**.
+# MAGIC 7. **Task 5, insights.** From the `modeling` node, **+ Add task**, **Depends on** `modeling`. Notebook = `insights`, Serverless, Parameters `catalog`, `schema`, `study_id`. **Save task**.
+# MAGIC
+# MAGIC You now have a clean linear pipeline with one condition task (the gate). Note the job's name; you'll select it in the next job.
+# MAGIC
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Job 2: eval_engine_after (config table + For each)
+# MAGIC
+# MAGIC 1. **Create** a new **Job** named `Eval Engine - AFTER`. Add job parameters `catalog` = `kk_test` and `schema` = `eval_engine_demo`.
+# MAGIC 2. **Task 1, load_config.** Type **Notebook**, path to `load_config`, Serverless, Parameters `catalog` = `{{job.parameters.catalog}}`, `schema` = `{{job.parameters.schema}}`. This notebook reads `study_config` and sets a `studies` task value (a JSON array, one object per study). **Save task**.
+# MAGIC 3. **Task 2, run_all_studies (the loop).** From the `load_config` node, **+ Add task**, **Depends on** `load_config`. In **Type** pick **For each**.
+# MAGIC    - In the **Inputs** box enter `{{tasks.load_config.values.studies}}`. (Using a task value here, rather than pasting JSON, avoids the 5,000-character limit on that box.)
+# MAGIC    - Set **Concurrency** to `5` (how many studies run in parallel).
+# MAGIC    - Click **Add a task to loop over** and configure the nested task:
+# MAGIC      - **Type** = **Run job**, and select the `Eval Engine - Run Single Study` job you built in Job 1.
+# MAGIC      - Under the nested task's **Job parameters**, map each field of the current loop item with `{{input.<field>}}`: `study_id` = `{{input.study_id}}`, `feature_method` = `{{input.feature_method}}`, `matching_method` = `{{input.matching_method}}`, `model_method` = `{{input.model_method}}`, and pass through `catalog` = `{{job.parameters.catalog}}`, `schema` = `{{job.parameters.schema}}`.
+# MAGIC      - **Save task**.
+# MAGIC
+# MAGIC That's the whole scalable job: two nodes (`load_config` then the `For each`), and the loop runs `run_single_study` once per row in your config table.
+# MAGIC
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Job 3 (optional): eval_engine_before (the if/else version, for contrast)
+# MAGIC
+# MAGIC You don't have to fully build this, the value is letting them feel the manual cost. Walk it verbally, or build a slice:
+# MAGIC
+# MAGIC 1. **Task, prep_and_route.** Notebook that emits three task values: `quality_passed`, `chosen_matching`, `chosen_model`.
+# MAGIC 2. **Task, gate.** If/else condition: `{{tasks.prep_and_route.values.quality_passed}}` equals `true`.
+# MAGIC 3. **For each matching method**, add an If/else condition task (for example `route_exact`: `{{tasks.prep_and_route.values.chosen_matching}}` equals `exact`) that depends on `gate (true)`, then a matching notebook task that depends on `route_exact (true)`.
+# MAGIC 4. **Under each matching branch**, add an If/else condition per model (`route_exact_att`, `route_exact_did`, ...) plus a model notebook task for each.
+# MAGIC
+# MAGIC The point lands fast: every new matching method or model is another condition task plus another notebook task, hand-wired, and the model layer repeats under every matching branch. That is the M-by-N growth.
+# MAGIC
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### How the UI maps to the bundle (DAB)
+# MAGIC
+# MAGIC Everything you just clicked has a one-to-one YAML equivalent. The bundle is the same thing, written down once.
+# MAGIC
+# MAGIC | In the UI | In the bundle YAML |
+# MAGIC |-----------|--------------------|
+# MAGIC | Edit parameters (job-level) | `parameters:` block in the `*.job.yml` |
+# MAGIC | Notebook task + Parameters | `notebook_task:` with `base_parameters:` |
+# MAGIC | `dbutils.jobs.taskValues.set` / `{{tasks.x.values.y}}` | same references, unchanged |
+# MAGIC | If/else condition task | `condition_task:` with `op`, `left`, `right` |
+# MAGIC | Depends on `(true)` / `(false)` | `depends_on:` with `outcome: "true"` / `"false"` |
+# MAGIC | For each task (Inputs, Concurrency) | `for_each_task:` with `inputs`, `concurrency` |
+# MAGIC | Nested Run job task | `run_job_task:` with `job_id` and `job_parameters` |
+# MAGIC | Serverless compute | no cluster block (serverless by default) |
+# MAGIC
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Tips and gotchas
+# MAGIC
+# MAGIC - Build `run_single_study` before the AFTER job, since the For each loop selects it as a Run job task.
+# MAGIC - The gate compares to the literal string `true`. Task values used in a condition must be string, number, or boolean.
+# MAGIC - The For each **Inputs** box caps at 5,000 characters if you paste JSON directly. Feeding it a task value (like `studies`) sidesteps that.
+# MAGIC - The nested task in a For each can be a Run job (what we use) or a single notebook task.
+# MAGIC - Set every task's Compute to Serverless to skip cluster setup.
+# MAGIC - Adding a study later is just one INSERT into `study_config`, no job edits. Adding a method or model is one branch inside `matching.py` or `modeling.py`, again no job edits.
