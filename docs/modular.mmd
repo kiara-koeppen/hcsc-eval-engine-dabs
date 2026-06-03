@@ -1,0 +1,28 @@
+---
+title: "MODULAR — Registry dispatch (separate team-owned notebooks) + for_each"
+---
+flowchart TD
+  classDef cond fill:#FDEBD0,stroke:#B9770E,color:#7E5109,font-weight:bold;
+  classDef nb fill:#E8F6F3,stroke:#148F77,color:#0E6251;
+  classDef leaf fill:#FEF9E7,stroke:#B7950B,color:#7D6608;
+  classDef ctrl fill:#EBF5FB,stroke:#2E86C1,color:#1B4F72,font-weight:bold;
+  classDef stop fill:#F2F3F4,stroke:#909497,color:#5F6A6A;
+
+  CFG["study_config_modular (the registry)<br/><i>per study: feature_nb - matching_nb - model_nb</i>"]:::ctrl --> LC
+  LC["load_config_modular<br/><i>emit studies[]</i>"]:::ctrl --> FE["for_each(studies)<br/>concurrency = 4"]:::ctrl
+  FE --> F
+
+  subgraph RS["run_study_modular  (runs once per study — flat DAG, never changes)"]
+    direction LR
+    F["dispatch_feature"]:::nb --> Q{{"quality_gate"}}:::cond
+    Q -->|pass| M["dispatch_matching"]:::nb
+    M --> MD["dispatch_model"]:::nb
+    MD --> I["insights"]:::nb
+    Q -->|fail| X["stop<br/>(study skipped)"]:::stop
+  end
+
+  F -. "dbutils.notebook.run(feature_nb)" .-> FL["feature_standard / feature_lme"]:::leaf
+  M -. "dbutils.notebook.run(matching_nb)" .-> ML["matching_standard / matching_stratified"]:::leaf
+  MD -. "dbutils.notebook.run(model_nb)" .-> MDL["model_att / model_did / model_lme"]:::leaf
+
+  N["Each dispatcher runs the config-named LEAF notebook as its own child run (full visibility).<br/>Leaves are SEPARATE files owned by separate teams - no shared mega-notebook to merge.<br/>Add a model = new leaf + one config row. LME just points at feature_lme + model_lme.<br/>Same flat DAG at 4 studies or 400; for_each fans out and parallelizes."]:::ctrl

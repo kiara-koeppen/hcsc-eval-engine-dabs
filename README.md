@@ -73,6 +73,58 @@ a task value from a sibling branch that got skipped). That's the `M × N` explos
 
 ---
 
+## Modular / multi-team track (post-meeting update, June 2026)
+
+The working session surfaced three requirements the original "consolidate into one
+parameterized notebook" approach did not fit:
+
+1. **Keep notebooks separate.** Multiple model-dev teams build in parallel; merging
+   everything into one notebook causes breakage. Notebooks must stay in their own files,
+   each owned by a team.
+2. **Let teams plug in new methods/models** without touching anyone else's code.
+3. **Handle structurally different models** like **LME** (one baseline + several
+   performance periods), whose feature engineering and data shape differ from the standard
+   single pre/post studies.
+
+The **modular track** (`resources/modular.job.yml`) reconciles all three while keeping the
+flat `for_each` DAG. It uses a **registry + dispatcher** pattern:
+
+- `study_config_modular` names a **leaf notebook per stage** for each study
+  (`feature_nb`, `matching_nb`, `model_nb`). That table is the registry.
+- Each stage in `run_study_modular` is a thin **dispatcher** that runs the config-named leaf
+  via `dbutils.notebook.run(<leaf>, ...)`. (Databricks job `notebook_path` is static and
+  **cannot** be set from a parameter — verified against the docs — so we select the notebook
+  in code, where the path is a runtime string.)
+- Each leaf runs as its **own child run**, so you keep full per-notebook visibility in the
+  run tree (this answers the "do we still see which notebook ran?" question).
+
+```
+study_config_modular ─(load_config)─▶ for_each(studies) ─▶ run_study_modular (per study):
+   dispatch_feature ─▶ quality_gate ─true─▶ dispatch_matching ─▶ dispatch_model ─▶ insights
+        │                                        │                     │
+        └ runs feature_nb        runs matching_nb┘        runs model_nb┘   (separate leaf notebooks)
+```
+
+See `docs/modular.png` for the diagram.
+
+**What this buys each requirement:**
+
+| Requirement | How the modular track meets it |
+|-------------|-------------------------------|
+| Separate, team-owned notebooks | Every method/model is its **own leaf** under `src/notebooks/registry/`. No shared mega-notebook to merge. |
+| Plug in a new method/model | Add a leaf notebook + one row in `study_config_modular`. No edit to dispatchers or the DAG. (`matching_stratified` in this repo demonstrates a "third team" contributing a method.) |
+| Structurally different LME | `M_LME_004` points at `feature_lme` (multi-period) + `model_lme` (longitudinal), and still **reuses** `matching_standard`. Same flat DAG; only the referenced leaves differ. |
+| Observability | Leaves run as child runs via `dbutils.notebook.run`, visible in the run tree. |
+
+**Leaf notebooks** (`src/notebooks/registry/`): `feature_standard`, `feature_lme`,
+`matching_standard` (exact/knn/ipw), `matching_stratified`, `model_att`, `model_did`,
+`model_lme`. Dispatchers: `dispatch_feature`, `dispatch_matching`, `dispatch_model`.
+
+> Both the modular (serverless) fan-out across all 4 studies **and** the non-serverless
+> cluster variant were deployed and run green in `kk_test`, June 2026.
+
+---
+
 ## Architecture / data flow
 
 ```
@@ -135,6 +187,37 @@ databricks bundle run eval_engine_after -t dev
 databricks bundle run eval_engine_before -t dev
 ```
 
+### Modular / multi-team track
+
+```bash
+# one-time: registry config + single-period + multi-period (LME) data
+databricks bundle run setup_modular -t dev
+
+# fan out over the registry — runs every study's leaf notebooks
+databricks bundle run eval_engine_modular -t dev
+```
+
+Add a model: drop `src/notebooks/registry/model_<x>.py`, add a row to
+`study_config_modular` with `model_nb = model_<x>`, re-run `eval_engine_modular`. No DAG
+edit. Same for a new matching method (`matching_nb`) or feature flow (`feature_nb`).
+
+### Run without serverless (existing cluster)
+
+For workspaces where serverless is not enabled, use the `*_cluster` jobs and point them at
+an existing all-purpose cluster via the `compute_cluster_id` variable:
+
+```bash
+CID=0712-123456-abcde12   # your cluster: Compute -> cluster -> Configuration, or: databricks clusters list
+
+databricks bundle deploy                  -t dev --var="compute_cluster_id=$CID"
+databricks bundle run setup_modular_cluster   -t dev --var="compute_cluster_id=$CID"
+databricks bundle run eval_engine_modular_cluster -t dev --var="compute_cluster_id=$CID"
+```
+
+Only notebook tasks bind to the cluster; `condition`, `for_each`, and `run_job` tasks need
+no compute. The dispatchers' `dbutils.notebook.run` children execute on the **same** cluster,
+so no serverless is required anywhere in the flow.
+
 Inspect results:
 
 ```sql
@@ -164,17 +247,33 @@ hcsc-eval-engine-dabs/
 ├── resources/
 │   ├── setup.job.yml                    # config + synthetic data job
 │   ├── run_single_study.job.yml         # per-study pipeline (the for_each unit)
-│   ├── eval_engine_after.job.yml        # ✅ config + for_each (scalable)
-│   └── eval_engine_before.job.yml       # ⚠️ if/else explosion (current state)
+│   ├── eval_engine_after.job.yml        # ✅ config + for_each (scalable, in-notebook dispatch)
+│   ├── eval_engine_before.job.yml       # ⚠️ if/else explosion (current state)
+│   ├── modular.job.yml                  # ✅ registry + dispatcher (separate team-owned leaves)
+│   └── modular_cluster.job.yml          # same as modular, bound to an existing cluster (no serverless)
 └── src/
     ├── setup/
-    │   └── 00_create_config_and_data.py # study_config + synthetic cohorts
+    │   ├── 00_create_config_and_data.py # study_config + synthetic cohorts
+    │   └── 01_create_modular_config.py  # study_config_modular + single/multi-period data
     └── notebooks/
         ├── load_config.py               # emits studies[] task value for for_each
         ├── feature_engineering.py       # dispatcher + quality gate (emits quality_passed)
         ├── matching.py                  # dispatcher: exact | knn | ipw
         ├── modeling.py                  # dispatcher: att | ate | did | gee | mixed (+ bootstrap CI)
         ├── insights.py                  # plain-language interpretation
+        ├── registry/                    # MODULAR track: separate, team-owned notebooks
+        │   ├── dispatch_feature.py      # runs the config-named feature leaf, sets quality_passed
+        │   ├── dispatch_matching.py     # runs the config-named matching leaf
+        │   ├── dispatch_model.py        # runs the config-named model leaf
+        │   ├── load_config_modular.py   # emits studies[] (incl. leaf names) for for_each
+        │   ├── insights_modular.py      # plain-language interpretation (reads study_config_modular)
+        │   ├── feature_standard.py      # leaf: single baseline + performance period
+        │   ├── feature_lme.py           # leaf: multi performance periods (structurally different)
+        │   ├── matching_standard.py     # leaf: exact | knn | ipw
+        │   ├── matching_stratified.py   # leaf: a "third team" plug-in matching method
+        │   ├── model_att.py             # leaf (ATT team)
+        │   ├── model_did.py             # leaf (DID team)
+        │   └── model_lme.py             # leaf (longitudinal team)
         └── _legacy/                     # notebooks used by the "before" job
             ├── prep_and_route.py        # emits chosen_matching / chosen_model / quality_passed
             ├── exact_matching.py

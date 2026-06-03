@@ -42,6 +42,18 @@ variables:
   schema:
     description: "Schema holding config, cohorts, and results"
     default: "eval_engine_demo"
+  compute_cluster_id:
+    description: >-
+      Existing all-purpose cluster ID for the NON-SERVERLESS variant
+      (resources/modular_cluster.job.yml). Workspaces without serverless
+      (e.g. where IT has not enabled it) set this to an existing cluster ID
+      and run the *_cluster jobs. The serverless jobs ignore this value.
+      Find it under Compute -> your cluster -> Configuration, or run:
+      databricks clusters list
+      NOTE: the default below is a kk_test dev cluster used to validate the
+      non-serverless path. HCSC: override it with your own cluster, either with
+      --var="compute_cluster_id=<your-id>" or by editing this default.
+    default: "0216-222923-3n4nk95u"
 
 # -----------------------------------------------------------------------------
 # Targets: each target = one environment. In real use, dev/test/prod would be

@@ -1,0 +1,169 @@
+# =============================================================================
+# MODULAR / MULTI-TEAM TRACK  (serverless)
+# =============================================================================
+# This is the pattern built for HCSC's actual requirement: keep model/method
+# notebooks SEPARATE (each owned by a different team, no shared mega-notebook to
+# merge), while the orchestration DAG stays flat and fans out with `for_each`.
+#
+# How it works:
+#   - `study_config_modular` names a LEAF notebook per stage for each study
+#     (feature_nb / matching_nb / model_nb). That table IS the registry.
+#   - Each stage in `run_study_modular` is a thin DISPATCHER that runs the
+#     config-named leaf via dbutils.notebook.run(). (Job notebook_path is static
+#     and cannot be parameterized, so we select the notebook in code, where the
+#     path is a runtime string.)
+#   - Each leaf runs as its own child run -> full visibility in the run tree.
+#   - Add a model  => add a leaf notebook + one config row. No DAG edit.
+#   - Add a study  => one config row. No DAG edit.
+#   - LME (structurally different) just points at feature_lme + model_lme; the
+#     graph shape is identical to every other study.
+#
+# Three jobs:
+#   setup_modular        -- one-time: registry config + single/multi-period data
+#   run_study_modular    -- the per-study pipeline (dispatchers + one quality gate)
+#   eval_engine_modular  -- load_config -> for_each(studies) -> run_study_modular
+# =============================================================================
+resources:
+  jobs:
+
+    # -------------------------------------------------------------------------
+    setup_modular:
+      name: "[${bundle.target}] Eval Engine - MODULAR Setup (registry + data)"
+      tasks:
+        - task_key: create_modular_config
+          notebook_task:
+            notebook_path: ../src/setup/01_create_modular_config.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+      queue:
+        enabled: true
+
+    # -------------------------------------------------------------------------
+    # Per-study pipeline. Flat DAG, exactly like run_single_study, but every
+    # stage is a dispatcher that runs a config-named leaf notebook.
+    #
+    #   feature(dispatch) -> quality_gate -> matching(dispatch) -> model(dispatch) -> insights
+    # -------------------------------------------------------------------------
+    run_study_modular:
+      name: "[${bundle.target}] Eval Engine - Run Study (modular)"
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+        - name: study_id
+          default: "M_ATT_001"
+        - name: feature_nb
+          default: "feature_standard"
+        - name: matching_nb
+          default: "matching_standard"
+        - name: matching_method
+          default: "exact"
+        - name: model_nb
+          default: "model_att"
+
+      tasks:
+        # Stage 1: feature dispatcher -> runs {{feature_nb}}, sets quality_passed
+        - task_key: feature
+          notebook_task:
+            notebook_path: ../src/notebooks/registry/dispatch_feature.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              study_id: "{{job.parameters.study_id}}"
+              feature_nb: "{{job.parameters.feature_nb}}"
+              config_table: "study_config_modular"
+
+        # The single legitimate condition task: PASS/FAIL data-quality gate.
+        - task_key: quality_gate
+          depends_on:
+            - task_key: feature
+          condition_task:
+            op: "EQUAL_TO"
+            left: "{{tasks.feature.values.quality_passed}}"
+            right: "true"
+
+        # Stage 2: matching dispatcher -> runs {{matching_nb}}
+        - task_key: matching
+          depends_on:
+            - task_key: quality_gate
+              outcome: "true"
+          notebook_task:
+            notebook_path: ../src/notebooks/registry/dispatch_matching.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              study_id: "{{job.parameters.study_id}}"
+              matching_nb: "{{job.parameters.matching_nb}}"
+              matching_method: "{{job.parameters.matching_method}}"
+
+        # Stage 3: model dispatcher -> runs {{model_nb}}
+        - task_key: model
+          depends_on:
+            - task_key: matching
+          notebook_task:
+            notebook_path: ../src/notebooks/registry/dispatch_model.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              study_id: "{{job.parameters.study_id}}"
+              model_nb: "{{job.parameters.model_nb}}"
+              config_table: "study_config_modular"
+
+        # Stage 4: insights
+        - task_key: insights
+          depends_on:
+            - task_key: model
+          notebook_task:
+            notebook_path: ../src/notebooks/registry/insights_modular.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              study_id: "{{job.parameters.study_id}}"
+              config_table: "study_config_modular"
+
+      queue:
+        enabled: true
+
+    # -------------------------------------------------------------------------
+    # Fan-out: read the registry, run one run_study_modular per study.
+    # -------------------------------------------------------------------------
+    eval_engine_modular:
+      name: "[${bundle.target}] Eval Engine - MODULAR (registry + for_each)"
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+
+      tasks:
+        - task_key: load_config_modular
+          notebook_task:
+            notebook_path: ../src/notebooks/registry/load_config_modular.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              config_table: "study_config_modular"
+
+        - task_key: run_all_studies
+          depends_on:
+            - task_key: load_config_modular
+          for_each_task:
+            inputs: "{{tasks.load_config_modular.values.studies}}"
+            concurrency: 4
+            task:
+              task_key: run_study
+              run_job_task:
+                job_id: ${resources.jobs.run_study_modular.id}
+                job_parameters:
+                  catalog: "{{job.parameters.catalog}}"
+                  schema: "{{job.parameters.schema}}"
+                  study_id: "{{input.study_id}}"
+                  feature_nb: "{{input.feature_nb}}"
+                  matching_nb: "{{input.matching_nb}}"
+                  matching_method: "{{input.matching_method}}"
+                  model_nb: "{{input.model_nb}}"
+
+      queue:
+        enabled: true
