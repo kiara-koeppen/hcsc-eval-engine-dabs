@@ -1,34 +1,31 @@
 # =============================================================================
 # MODULAR / MULTI-TEAM TRACK  (serverless)  -- CONFIG-DRIVEN BRANCH
 # =============================================================================
-# Shape the team asked for: the config decides, then the flow BRANCHES.
+# The config decides, then the job BRANCHES. The standard family rides one shared
+# for_each loop. Each structurally-different LME model gets its OWN branch off the
+# job with its OWN dedicated pipeline + notebooks (no loop) -- matching what the
+# team described (Alex: "the next path is also LME but completely different... we're
+# not going to use the for each").
 #
 #   load_config_branched
-#     ├─ (has_standard?) ─true─▶ for_each(standard studies) ─▶ run_study_modular
-#     │                              (shared flow; separate team-owned model notebooks)
-#     └─ (has_lme?)      ─true─▶ for_each(lme studies)      ─▶ run_lme_study
-#                                    (a SEPARATE workstream with its OWN notebooks)
+#     ├─ has_standard?   ─true─▶ for_each(standard studies) ─▶ run_study_modular
+#     ├─ has_lme_mixed?  ─true─▶ run_lme_mixed   (its own feature/matching/model notebooks)
+#     └─ has_lme_growth? ─true─▶ run_lme_growth  (its own feature/matching/model notebooks)
 #
-# Why two workstreams instead of one loop:
-#   - Standard models (ATT/ATE/DID/pre-post) share feature + matching and differ only by
-#     model, so they ride one shared per-study pipeline that fans out with for_each.
-#   - LME is structurally different (one baseline + several performance periods). It does
-#     NOT fit the standard pipeline, so it branches off into its own dedicated pipeline
-#     (feature_lme -> matching_lme -> model_lme) that can diverge freely. It still fans out
-#     with its own for_each over however many LME studies exist.
-#   - Adding another odd-shaped model later = add another branch + its own workstream.
-#     Adding a standard model = a new leaf notebook + a config row (no branch).
+# Add another odd-shaped model = add its rows to the config, a has_<family> flag in
+# load_config_branched, a run_<family> job here, and one branch below. Add a standard
+# model = a leaf notebook + a config row (no branch).
 #
 # Jobs:
 #   setup_modular        -- one-time: registry config + single/multi-period data
 #   run_study_modular    -- STANDARD per-study pipeline (dispatchers -> team-owned leaves)
-#   run_lme_study        -- DEDICATED LME per-study pipeline (its own notebooks)
-#   eval_engine_modular  -- load_config -> branch -> the two for_each workstreams
+#   run_lme_mixed        -- DEDICATED mixed-effects LME pipeline (own notebooks)
+#   run_lme_growth       -- DEDICATED growth-curve LME pipeline (own notebooks)
+#   eval_engine_modular  -- load_config -> branch into the loop + the LME workstreams
 # =============================================================================
 resources:
   jobs:
 
-    # -------------------------------------------------------------------------
     setup_modular:
       name: "[${bundle.target}] Eval Engine - MODULAR Setup (registry + data)"
       tasks:
@@ -41,175 +38,124 @@ resources:
       queue:
         enabled: true
 
-    # -------------------------------------------------------------------------
-    # STANDARD per-study pipeline. Every stage is a dispatcher that runs the
-    # config-named leaf notebook, so standard models stay in separate team-owned
-    # files. Flat: feature -> quality_gate -> matching -> model -> insights.
-    # -------------------------------------------------------------------------
+    # ---- STANDARD per-study pipeline (shared; dispatchers run team-owned leaves) ----
     run_study_modular:
       name: "[${bundle.target}] Eval Engine - Run Study (standard)"
       parameters:
-        - name: catalog
-          default: ${var.catalog}
-        - name: schema
-          default: ${var.schema}
-        - name: study_id
-          default: "M_ATT_001"
-        - name: feature_nb
-          default: "feature_standard"
-        - name: matching_nb
-          default: "matching_standard"
-        - name: matching_method
-          default: "exact"
-        - name: model_nb
-          default: "model_att"
+        - {name: catalog, default: "${var.catalog}"}
+        - {name: schema, default: "${var.schema}"}
+        - {name: study_id, default: "M_ATT_001"}
+        - {name: feature_nb, default: "feature_standard"}
+        - {name: matching_nb, default: "matching_standard"}
+        - {name: matching_method, default: "exact"}
+        - {name: model_nb, default: "model_att"}
       tasks:
         - task_key: feature
           notebook_task:
             notebook_path: ../src/notebooks/registry/dispatch_feature.py
-            base_parameters:
-              catalog: "{{job.parameters.catalog}}"
-              schema: "{{job.parameters.schema}}"
-              study_id: "{{job.parameters.study_id}}"
-              feature_nb: "{{job.parameters.feature_nb}}"
-              config_table: "study_config_modular"
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", feature_nb: "{{job.parameters.feature_nb}}", config_table: "study_config_modular"}
         - task_key: quality_gate
-          depends_on:
-            - task_key: feature
-          condition_task:
-            op: "EQUAL_TO"
-            left: "{{tasks.feature.values.quality_passed}}"
-            right: "true"
+          depends_on: [{task_key: feature}]
+          condition_task: {op: "EQUAL_TO", left: "{{tasks.feature.values.quality_passed}}", right: "true"}
         - task_key: matching
-          depends_on:
-            - task_key: quality_gate
-              outcome: "true"
+          depends_on: [{task_key: quality_gate, outcome: "true"}]
           notebook_task:
             notebook_path: ../src/notebooks/registry/dispatch_matching.py
-            base_parameters:
-              catalog: "{{job.parameters.catalog}}"
-              schema: "{{job.parameters.schema}}"
-              study_id: "{{job.parameters.study_id}}"
-              matching_nb: "{{job.parameters.matching_nb}}"
-              matching_method: "{{job.parameters.matching_method}}"
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", matching_nb: "{{job.parameters.matching_nb}}", matching_method: "{{job.parameters.matching_method}}"}
         - task_key: model
-          depends_on:
-            - task_key: matching
+          depends_on: [{task_key: matching}]
           notebook_task:
             notebook_path: ../src/notebooks/registry/dispatch_model.py
-            base_parameters:
-              catalog: "{{job.parameters.catalog}}"
-              schema: "{{job.parameters.schema}}"
-              study_id: "{{job.parameters.study_id}}"
-              model_nb: "{{job.parameters.model_nb}}"
-              config_table: "study_config_modular"
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", model_nb: "{{job.parameters.model_nb}}", config_table: "study_config_modular"}
         - task_key: insights
-          depends_on:
-            - task_key: model
+          depends_on: [{task_key: model}]
           notebook_task:
             notebook_path: ../src/notebooks/registry/insights_modular.py
-            base_parameters:
-              catalog: "{{job.parameters.catalog}}"
-              schema: "{{job.parameters.schema}}"
-              study_id: "{{job.parameters.study_id}}"
-              config_table: "study_config_modular"
-      queue:
-        enabled: true
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular"}
+      queue: {enabled: true}
 
-    # -------------------------------------------------------------------------
-    # DEDICATED LME pipeline -- the separate workstream. Direct notebook tasks
-    # wired to the LME team's OWN notebooks (no dispatcher, no shared leaves).
-    # This is free to diverge in shape from the standard pipeline.
-    # -------------------------------------------------------------------------
-    run_lme_study:
-      name: "[${bundle.target}] Eval Engine - Run Study (LME workstream)"
+    # ---- DEDICATED LME branch 1: mixed-effects (its own notebook trio) ----
+    run_lme_mixed:
+      name: "[${bundle.target}] Eval Engine - Run LME (mixed-effects)"
       parameters:
-        - name: catalog
-          default: ${var.catalog}
-        - name: schema
-          default: ${var.schema}
-        - name: study_id
-          default: "M_LME_004"
+        - {name: catalog, default: "${var.catalog}"}
+        - {name: schema, default: "${var.schema}"}
+        - {name: study_id, default: "M_LME_MIXED"}
       tasks:
-        - task_key: feature_lme
+        - task_key: feature_lme_mixed
           notebook_task:
-            notebook_path: ../src/notebooks/registry/feature_lme.py
-            base_parameters:
-              catalog: "{{job.parameters.catalog}}"
-              schema: "{{job.parameters.schema}}"
-              study_id: "{{job.parameters.study_id}}"
-              config_table: "study_config_modular"
+            notebook_path: ../src/notebooks/registry/feature_lme_mixed.py
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular"}
         - task_key: quality_gate
-          depends_on:
-            - task_key: feature_lme
-          condition_task:
-            op: "EQUAL_TO"
-            left: "{{tasks.feature_lme.values.quality_passed}}"
-            right: "true"
-        - task_key: matching_lme
-          depends_on:
-            - task_key: quality_gate
-              outcome: "true"
+          depends_on: [{task_key: feature_lme_mixed}]
+          condition_task: {op: "EQUAL_TO", left: "{{tasks.feature_lme_mixed.values.quality_passed}}", right: "true"}
+        - task_key: matching_lme_mixed
+          depends_on: [{task_key: quality_gate, outcome: "true"}]
           notebook_task:
-            notebook_path: ../src/notebooks/registry/matching_lme.py
-            base_parameters:
-              catalog: "{{job.parameters.catalog}}"
-              schema: "{{job.parameters.schema}}"
-              study_id: "{{job.parameters.study_id}}"
-        - task_key: model_lme
-          depends_on:
-            - task_key: matching_lme
+            notebook_path: ../src/notebooks/registry/matching_lme_mixed.py
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}"}
+        - task_key: model_lme_mixed
+          depends_on: [{task_key: matching_lme_mixed}]
           notebook_task:
-            notebook_path: ../src/notebooks/registry/model_lme.py
-            base_parameters:
-              catalog: "{{job.parameters.catalog}}"
-              schema: "{{job.parameters.schema}}"
-              study_id: "{{job.parameters.study_id}}"
-              config_table: "study_config_modular"
+            notebook_path: ../src/notebooks/registry/model_lme_mixed.py
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular"}
         - task_key: insights
-          depends_on:
-            - task_key: model_lme
+          depends_on: [{task_key: model_lme_mixed}]
           notebook_task:
             notebook_path: ../src/notebooks/registry/insights_modular.py
-            base_parameters:
-              catalog: "{{job.parameters.catalog}}"
-              schema: "{{job.parameters.schema}}"
-              study_id: "{{job.parameters.study_id}}"
-              config_table: "study_config_modular"
-      queue:
-        enabled: true
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular"}
+      queue: {enabled: true}
 
-    # -------------------------------------------------------------------------
-    # Top level: read config, then BRANCH into the two workstreams.
-    # -------------------------------------------------------------------------
-    eval_engine_modular:
-      name: "[${bundle.target}] Eval Engine - MODULAR (branch: standard loop + LME workstream)"
+    # ---- DEDICATED LME branch 2: growth-curve (its own notebook trio) ----
+    run_lme_growth:
+      name: "[${bundle.target}] Eval Engine - Run LME (growth-curve)"
       parameters:
-        - name: catalog
-          default: ${var.catalog}
-        - name: schema
-          default: ${var.schema}
+        - {name: catalog, default: "${var.catalog}"}
+        - {name: schema, default: "${var.schema}"}
+        - {name: study_id, default: "M_LME_GROWTH"}
+      tasks:
+        - task_key: feature_lme_growth
+          notebook_task:
+            notebook_path: ../src/notebooks/registry/feature_lme_growth.py
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular"}
+        - task_key: quality_gate
+          depends_on: [{task_key: feature_lme_growth}]
+          condition_task: {op: "EQUAL_TO", left: "{{tasks.feature_lme_growth.values.quality_passed}}", right: "true"}
+        - task_key: matching_lme_growth
+          depends_on: [{task_key: quality_gate, outcome: "true"}]
+          notebook_task:
+            notebook_path: ../src/notebooks/registry/matching_lme_growth.py
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}"}
+        - task_key: model_lme_growth
+          depends_on: [{task_key: matching_lme_growth}]
+          notebook_task:
+            notebook_path: ../src/notebooks/registry/model_lme_growth.py
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular"}
+        - task_key: insights
+          depends_on: [{task_key: model_lme_growth}]
+          notebook_task:
+            notebook_path: ../src/notebooks/registry/insights_modular.py
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular"}
+      queue: {enabled: true}
+
+    # ---- Top level: read config, then branch into the loop + each LME workstream ----
+    eval_engine_modular:
+      name: "[${bundle.target}] Eval Engine - MODULAR (branch: standard loop + LME workstreams)"
+      parameters:
+        - {name: catalog, default: "${var.catalog}"}
+        - {name: schema, default: "${var.schema}"}
       tasks:
         - task_key: load_config_branched
           notebook_task:
             notebook_path: ../src/notebooks/registry/load_config_branched.py
-            base_parameters:
-              catalog: "{{job.parameters.catalog}}"
-              schema: "{{job.parameters.schema}}"
-              config_table: "study_config_modular"
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", config_table: "study_config_modular"}
 
-        # ---- Branch 1: standard family -> shared for_each loop ----
+        # Branch A: standard family -> shared for_each loop
         - task_key: branch_standard
-          depends_on:
-            - task_key: load_config_branched
-          condition_task:
-            op: "EQUAL_TO"
-            left: "{{tasks.load_config_branched.values.has_standard}}"
-            right: "true"
+          depends_on: [{task_key: load_config_branched}]
+          condition_task: {op: "EQUAL_TO", left: "{{tasks.load_config_branched.values.has_standard}}", right: "true"}
         - task_key: run_standard_studies
-          depends_on:
-            - task_key: branch_standard
-              outcome: "true"
+          depends_on: [{task_key: branch_standard, outcome: "true"}]
           for_each_task:
             inputs: "{{tasks.load_config_branched.values.standard_studies}}"
             concurrency: 4
@@ -217,38 +163,26 @@ resources:
               task_key: run_standard
               run_job_task:
                 job_id: ${resources.jobs.run_study_modular.id}
-                job_parameters:
-                  catalog: "{{job.parameters.catalog}}"
-                  schema: "{{job.parameters.schema}}"
-                  study_id: "{{input.study_id}}"
-                  feature_nb: "{{input.feature_nb}}"
-                  matching_nb: "{{input.matching_nb}}"
-                  matching_method: "{{input.matching_method}}"
-                  model_nb: "{{input.model_nb}}"
+                job_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{input.study_id}}", feature_nb: "{{input.feature_nb}}", matching_nb: "{{input.matching_nb}}", matching_method: "{{input.matching_method}}", model_nb: "{{input.model_nb}}"}
 
-        # ---- Branch 2: LME family -> its OWN separate workstream (own for_each) ----
-        - task_key: branch_lme
-          depends_on:
-            - task_key: load_config_branched
-          condition_task:
-            op: "EQUAL_TO"
-            left: "{{tasks.load_config_branched.values.has_lme}}"
-            right: "true"
-        - task_key: run_lme_studies
-          depends_on:
-            - task_key: branch_lme
-              outcome: "true"
-          for_each_task:
-            inputs: "{{tasks.load_config_branched.values.lme_studies}}"
-            concurrency: 4
-            task:
-              task_key: run_lme
-              run_job_task:
-                job_id: ${resources.jobs.run_lme_study.id}
-                job_parameters:
-                  catalog: "{{job.parameters.catalog}}"
-                  schema: "{{job.parameters.schema}}"
-                  study_id: "{{input.study_id}}"
+        # Branch B: mixed-effects LME -> its own workstream
+        - task_key: branch_lme_mixed
+          depends_on: [{task_key: load_config_branched}]
+          condition_task: {op: "EQUAL_TO", left: "{{tasks.load_config_branched.values.has_lme_mixed}}", right: "true"}
+        - task_key: run_lme_mixed
+          depends_on: [{task_key: branch_lme_mixed, outcome: "true"}]
+          run_job_task:
+            job_id: ${resources.jobs.run_lme_mixed.id}
+            job_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}"}
 
-      queue:
-        enabled: true
+        # Branch C: growth-curve LME -> its own workstream
+        - task_key: branch_lme_growth
+          depends_on: [{task_key: load_config_branched}]
+          condition_task: {op: "EQUAL_TO", left: "{{tasks.load_config_branched.values.has_lme_growth}}", right: "true"}
+        - task_key: run_lme_growth
+          depends_on: [{task_key: branch_lme_growth, outcome: "true"}]
+          run_job_task:
+            job_id: ${resources.jobs.run_lme_growth.id}
+            job_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}"}
+
+      queue: {enabled: true}

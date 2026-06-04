@@ -1,5 +1,5 @@
 ---
-title: "MODULAR — config-driven BRANCH: standard for_each loop + separate LME workstream"
+title: "MODULAR — config-driven BRANCH: standard for_each loop + a separate branch per LME model"
 ---
 flowchart TD
   classDef cond fill:#FDEBD0,stroke:#B9770E,color:#7E5109,font-weight:bold;
@@ -7,27 +7,37 @@ flowchart TD
   classDef leaf fill:#FEF9E7,stroke:#B7950B,color:#7D6608;
   classDef ctrl fill:#EBF5FB,stroke:#2E86C1,color:#1B4F72,font-weight:bold;
 
-  CFG["study_config_modular<br/><i>model_family = standard | lme</i>"]:::ctrl --> LC
-  LC["load_config_branched<br/><i>split into standard[] and lme[]</i>"]:::ctrl --> BS{{"branch:<br/>has_standard?"}}:::cond
-  LC --> BL{{"branch:<br/>has_lme?"}}:::cond
+  CFG["study_config_modular<br/><i>model_family = standard | lme_mixed | lme_growth | ...</i>"]:::ctrl --> LC
+  LC["load_config_branched<br/><i>split + set branch flags</i>"]:::ctrl
 
-  %% ---- Branch 1: standard family, shared for_each loop ----
-  BS -->|true| FES["for_each(standard studies)<br/>concurrency = 4"]:::ctrl
+  LC --> BS{{"branch:<br/>standard?"}}:::cond
+  LC --> BM{{"branch:<br/>lme_mixed?"}}:::cond
+  LC --> BG{{"branch:<br/>lme_growth?"}}:::cond
+
+  %% standard family: shared for_each loop
+  BS -->|true| FES["for_each(standard studies)"]:::ctrl
   subgraph RS["run_study_modular  (shared standard pipeline)"]
     direction LR
-    F["dispatch_feature"]:::nb --> Q{{"quality_gate"}}:::cond
+    F["dispatch_feature"]:::nb --> Q{{"gate"}}:::cond
     Q -->|pass| M["dispatch_matching"]:::nb --> MD["dispatch_model"]:::nb --> I["insights"]:::nb
   end
   FES --> F
-  MD -. "runs the config-named leaf" .-> SL["feature_standard / matching_standard /<br/>matching_stratified / model_att / model_did"]:::leaf
+  MD -. "config-named leaf" .-> SL["model_att / model_did /<br/>matching_stratified ..."]:::leaf
 
-  %% ---- Branch 2: LME family, its OWN separate workstream ----
-  BL -->|true| FEL["for_each(lme studies)<br/>concurrency = 4"]:::ctrl
-  subgraph RL["run_lme_study  (DEDICATED LME workstream — its own notebooks)"]
+  %% LME model 1: its OWN branch + notebooks (no loop)
+  BM -->|true| RM
+  subgraph RM["run_lme_mixed  (its OWN notebooks)"]
     direction LR
-    LF["feature_lme"]:::leaf --> LQ{{"quality_gate"}}:::cond
-    LQ -->|pass| LM["matching_lme"]:::leaf --> LMD["model_lme"]:::leaf --> LI["insights"]:::nb
+    F1["feature_lme_mixed"]:::leaf --> Q1{{"gate"}}:::cond
+    Q1 -->|pass| M1["matching_lme_mixed"]:::leaf --> D1["model_lme_mixed"]:::leaf --> I1["insights"]:::nb
   end
-  FEL --> LF
 
-  N["The config DECIDES, then the flow BRANCHES. Standard models (ATT/ATE/DID/pre-post) share<br/>one pipeline and fan out with for_each. LME is structurally different (multi performance period),<br/>so it breaks off into its OWN workstream with its OWN notebooks and can diverge freely.<br/>Add another odd-shaped model = another branch + workstream. Add a standard model = a leaf + a config row."]:::ctrl
+  %% LME model 2: its OWN branch + notebooks (no loop)
+  BG -->|true| RG
+  subgraph RG["run_lme_growth  (its OWN notebooks)"]
+    direction LR
+    F2["feature_lme_growth"]:::leaf --> Q2{{"gate"}}:::cond
+    Q2 -->|pass| M2["matching_lme_growth"]:::leaf --> D2["model_lme_growth"]:::leaf --> I2["insights"]:::nb
+  end
+
+  N["The config DECIDES, then the job BRANCHES. Standard models (ATT/ATE/DID/pre-post) share one<br/>pipeline and fan out with for_each. Each structurally-different LME model is its OWN branch with<br/>its OWN feature/matching/model notebooks, NO loop, so each can diverge freely. Add another such<br/>model = add its rows + a branch. Add a standard model = a leaf notebook + a config row."]:::ctrl

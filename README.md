@@ -87,16 +87,18 @@ parameterized notebook" approach did not fit:
    single pre/post studies.
 
 The **modular track** (`resources/modular.job.yml`) handles all three with a **config-driven
-branch**: the config decides, then the flow splits into two workstreams.
+branch**: the config decides, then the job splits into the shared loop plus **one dedicated
+branch per structurally-different model**.
 
 ```
-study_config_modular ─(load_config_branched)─▶ split by model_family
-   ├─ branch: has_standard? ─true─▶ for_each(standard studies) ─▶ run_study_modular
-   │                                   dispatch_feature ─▶ gate ─▶ dispatch_matching ─▶ dispatch_model ─▶ insights
-   │                                   (shared pipeline; dispatchers run the config-named leaf per stage)
-   └─ branch: has_lme?      ─true─▶ for_each(lme studies)      ─▶ run_lme_study  (SEPARATE workstream)
-                                       feature_lme ─▶ gate ─▶ matching_lme ─▶ model_lme ─▶ insights
-                                       (its OWN dedicated notebooks; free to diverge in shape)
+study_config_modular ─(load_config_branched)─▶ split by model_family + set branch flags
+   ├─ has_standard?   ─true─▶ for_each(standard studies) ─▶ run_study_modular
+   │                             dispatch_feature ─▶ gate ─▶ dispatch_matching ─▶ dispatch_model ─▶ insights
+   │                             (shared pipeline; dispatchers run the config-named leaf per stage)
+   ├─ has_lme_mixed?  ─true─▶ run_lme_mixed   (OWN branch, OWN notebooks, NO loop)
+   │                             feature_lme_mixed ─▶ gate ─▶ matching_lme_mixed ─▶ model_lme_mixed ─▶ insights
+   └─ has_lme_growth? ─true─▶ run_lme_growth  (OWN branch, OWN notebooks, NO loop)
+                                 feature_lme_growth ─▶ gate ─▶ matching_lme_growth ─▶ model_lme_growth ─▶ insights
 ```
 
 See `docs/modular.png` for the diagram.
@@ -108,10 +110,13 @@ See `docs/modular.png` for the diagram.
   static and cannot be set from a parameter — verified against the docs — so the notebook is
   selected in code, where the path is a runtime string. Each leaf runs as its own child run,
   preserving per-notebook visibility.)
-- **LME** is structurally different (one baseline + several performance periods), so it does
-  **not** ride the standard pipeline. The config branches it into a **separate workstream**
-  (`run_lme_study`) with its **own** notebooks (`feature_lme → matching_lme → model_lme`),
-  which can diverge freely. It still fans out with its own `for_each` over the LME studies.
+- **Each structurally-different model gets its own branch.** LME models do **not** ride the
+  standard pipeline and are **not** looped. Each is a separate branch off the job
+  (`run_lme_mixed`, `run_lme_growth`) with its **own** feature/matching/model notebooks, so it
+  can diverge in shape completely. This matches what the team described: "the next path is also
+  LME but completely different... we're not going to use the for each." `lme_mixed` (constant
+  per-period effect) and `lme_growth` (effect that changes over time, a slope) are two example
+  branches — rename or add more for your real models.
 
 **What this buys each requirement:**
 
@@ -119,18 +124,19 @@ See `docs/modular.png` for the diagram.
 |-------------|-------------------------------|
 | Separate, team-owned notebooks | Every method/model is its **own file** under `src/notebooks/registry/`. No shared mega-notebook to merge. |
 | Plug in a new standard method/model | Add a leaf notebook + one row in `study_config_modular`. No DAG edit. (`matching_stratified` demonstrates a "third team" contributing a method.) |
-| Structurally different model (LME) | It **branches into its own workstream** (`run_lme_study`) with its own notebooks, not forced through the standard pipeline. Add another odd-shaped model later = another branch + workstream. |
-| Observability | Standard leaves run as child runs via `dbutils.notebook.run`; the LME workstream's stages are first-class tasks. Both fully visible in the run tree. |
+| Structurally different model | Gets its **own branch + own notebook trio** off the job (e.g. `run_lme_mixed`, `run_lme_growth`), not forced through the standard pipeline and not looped. Add another = its rows + a `has_<family>` flag in `load_config_branched` + a branch in the job. |
+| Observability | Standard leaves run as child runs via `dbutils.notebook.run`; each LME branch's stages are first-class tasks. Both fully visible in the run tree. |
 
 **Standard leaves / dispatchers** (`src/notebooks/registry/`): `feature_standard`,
 `matching_standard` (exact/knn/ipw), `matching_stratified`, `model_att`, `model_did`, run by
-`dispatch_feature` / `dispatch_matching` / `dispatch_model`. **LME workstream notebooks:**
-`feature_lme`, `matching_lme`, `model_lme`. Routing: `load_config_branched`.
+`dispatch_feature` / `dispatch_matching` / `dispatch_model`. **LME branch notebooks:**
+`feature_lme_mixed` / `matching_lme_mixed` / `model_lme_mixed` and `feature_lme_growth` /
+`matching_lme_growth` / `model_lme_growth`. Routing: `load_config_branched`.
 
 > The branched engine was deployed and run green in `kk_test` (June 2026): `load_config_branched`
-> routed both branches, the 3 standard studies ran through the shared `for_each` loop, and the
-> LME study ran through its own `run_lme_study` workstream (`feature_lme → matching_lme →
-> model_lme`). A non-serverless cluster variant (`*_cluster` jobs) mirrors the same branch.
+> routed all three branches, the 3 standard studies ran through the shared `for_each` loop, and
+> each LME model ran through its own branch (`run_lme_mixed`, `run_lme_growth`) with its own
+> notebooks. A non-serverless cluster variant (`*_cluster` jobs) mirrors the same branches.
 
 ---
 
@@ -202,13 +208,17 @@ databricks bundle run eval_engine_before -t dev
 # one-time: registry config + single-period + multi-period (LME) data
 databricks bundle run setup_modular -t dev
 
-# fan out over the registry — runs every study's leaf notebooks
+# branch: standard family loops; each LME model runs its own branch
 databricks bundle run eval_engine_modular -t dev
 ```
 
-Add a model: drop `src/notebooks/registry/model_<x>.py`, add a row to
-`study_config_modular` with `model_nb = model_<x>`, re-run `eval_engine_modular`. No DAG
-edit. Same for a new matching method (`matching_nb`) or feature flow (`feature_nb`).
+Add a **standard** model: drop `src/notebooks/registry/model_<x>.py`, add a row to
+`study_config_modular` with `model_nb = model_<x>`, re-run `eval_engine_modular`. No DAG edit.
+Same for a new matching method (`matching_nb`) or feature flow (`feature_nb`).
+
+Add another **structurally-different** model (its own branch): add its notebook trio under
+`src/notebooks/registry/`, a config row with `model_family = <family>`, a `has_<family>` flag
+in `load_config_branched.py`, a `run_<family>` job, and one branch in `eval_engine_modular`.
 
 ### Run without serverless (existing cluster)
 
@@ -258,8 +268,8 @@ hcsc-eval-engine-dabs/
 │   ├── run_single_study.job.yml         # per-study pipeline (the for_each unit)
 │   ├── eval_engine_after.job.yml        # ✅ config + for_each (scalable, in-notebook dispatch)
 │   ├── eval_engine_before.job.yml       # ⚠️ if/else explosion (current state)
-│   ├── modular.job.yml                  # ✅ registry + dispatcher (separate team-owned leaves)
-│   └── modular_cluster.job.yml          # same as modular, bound to an existing cluster (no serverless)
+│   ├── modular.job.yml                  # ✅ config-driven branch: standard loop + 1 branch per LME model
+│   └── modular_cluster.job.yml          # same branches, bound to an existing cluster (no serverless)
 └── src/
     ├── setup/
     │   ├── 00_create_config_and_data.py # study_config + synthetic cohorts
@@ -281,9 +291,12 @@ hcsc-eval-engine-dabs/
         │   ├── matching_stratified.py   # standard leaf: a "third team" plug-in matching method
         │   ├── model_att.py             # standard leaf (ATT team)
         │   ├── model_did.py             # standard leaf (DID team)
-        │   ├── feature_lme.py           # LME workstream: multi performance periods
-        │   ├── matching_lme.py          # LME workstream: dedicated matching
-        │   └── model_lme.py             # LME workstream: longitudinal estimator
+        │   ├── feature_lme_mixed.py     # lme_mixed branch: own feature notebook
+        │   ├── matching_lme_mixed.py    # lme_mixed branch: own matching notebook
+        │   ├── model_lme_mixed.py       # lme_mixed branch: mixed-effects estimator
+        │   ├── feature_lme_growth.py    # lme_growth branch: own feature notebook
+        │   ├── matching_lme_growth.py   # lme_growth branch: own matching notebook
+        │   └── model_lme_growth.py      # lme_growth branch: growth-curve (slope) estimator
         └── _legacy/                     # notebooks used by the "before" job
             ├── prep_and_route.py        # emits chosen_matching / chosen_model / quality_passed
             ├── exact_matching.py

@@ -3,7 +3,7 @@
 # MAGIC # DISPATCHER: model stage
 # MAGIC
 # MAGIC Runs the config-named model leaf (`model_nb`) with `dbutils.notebook.run(...)`. Each
-# MAGIC model is its own notebook owned by its own team (`model_att`, `model_did`, `model_lme`,
+# MAGIC model is its own notebook owned by its own team (`model_att`, `model_did`, `model_lme_mixed`,
 # MAGIC ...). Adding the next model is a new leaf + a config row — never an edit to this file or
 # MAGIC the DAG.
 

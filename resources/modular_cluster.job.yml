@@ -1,17 +1,14 @@
 # =============================================================================
 # MODULAR / MULTI-TEAM TRACK  (NON-SERVERLESS / existing cluster)
 # =============================================================================
-# Same config-driven branch as resources/modular.job.yml, but every notebook task
-# runs on an EXISTING all-purpose cluster (for workspaces without serverless, e.g.
-# HCSC today). Set the cluster once via the `compute_cluster_id` bundle variable:
+# Same config-driven branch as resources/modular.job.yml (standard for_each loop +
+# one dedicated branch per LME model), but every notebook task runs on an existing
+# all-purpose cluster. Set it once via the `compute_cluster_id` bundle variable:
 #
 #   CID=0712-123456-abcde12
-#   databricks bundle deploy                     -t dev --var="compute_cluster_id=$CID"
-#   databricks bundle run setup_modular_cluster      -t dev --var="compute_cluster_id=$CID"
+#   databricks bundle deploy                      -t dev --var="compute_cluster_id=$CID"
+#   databricks bundle run setup_modular_cluster       -t dev --var="compute_cluster_id=$CID"
 #   databricks bundle run eval_engine_modular_cluster -t dev --var="compute_cluster_id=$CID"
-#
-# Only notebook tasks bind to the cluster; condition_task / for_each_task / run_job_task
-# need no compute.
 # =============================================================================
 resources:
   jobs:
@@ -23,175 +20,134 @@ resources:
           existing_cluster_id: ${var.compute_cluster_id}
           notebook_task:
             notebook_path: ../src/setup/01_create_modular_config.py
-            base_parameters:
-              catalog: ${var.catalog}
-              schema: ${var.schema}
-      queue:
-        enabled: true
+            base_parameters: {catalog: "${var.catalog}", schema: "${var.schema}"}
+      queue: {enabled: true}
 
     run_study_modular_cluster:
       name: "[${bundle.target}] Eval Engine - Run Study (standard, cluster)"
       parameters:
-        - name: catalog
-          default: ${var.catalog}
-        - name: schema
-          default: ${var.schema}
-        - name: study_id
-          default: "M_ATT_001"
-        - name: feature_nb
-          default: "feature_standard"
-        - name: matching_nb
-          default: "matching_standard"
-        - name: matching_method
-          default: "exact"
-        - name: model_nb
-          default: "model_att"
+        - {name: catalog, default: "${var.catalog}"}
+        - {name: schema, default: "${var.schema}"}
+        - {name: study_id, default: "M_ATT_001"}
+        - {name: feature_nb, default: "feature_standard"}
+        - {name: matching_nb, default: "matching_standard"}
+        - {name: matching_method, default: "exact"}
+        - {name: model_nb, default: "model_att"}
       tasks:
         - task_key: feature
           existing_cluster_id: ${var.compute_cluster_id}
           notebook_task:
             notebook_path: ../src/notebooks/registry/dispatch_feature.py
-            base_parameters:
-              catalog: "{{job.parameters.catalog}}"
-              schema: "{{job.parameters.schema}}"
-              study_id: "{{job.parameters.study_id}}"
-              feature_nb: "{{job.parameters.feature_nb}}"
-              config_table: "study_config_modular"
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", feature_nb: "{{job.parameters.feature_nb}}", config_table: "study_config_modular"}
         - task_key: quality_gate
-          depends_on:
-            - task_key: feature
-          condition_task:
-            op: "EQUAL_TO"
-            left: "{{tasks.feature.values.quality_passed}}"
-            right: "true"
+          depends_on: [{task_key: feature}]
+          condition_task: {op: "EQUAL_TO", left: "{{tasks.feature.values.quality_passed}}", right: "true"}
         - task_key: matching
-          depends_on:
-            - task_key: quality_gate
-              outcome: "true"
+          depends_on: [{task_key: quality_gate, outcome: "true"}]
           existing_cluster_id: ${var.compute_cluster_id}
           notebook_task:
             notebook_path: ../src/notebooks/registry/dispatch_matching.py
-            base_parameters:
-              catalog: "{{job.parameters.catalog}}"
-              schema: "{{job.parameters.schema}}"
-              study_id: "{{job.parameters.study_id}}"
-              matching_nb: "{{job.parameters.matching_nb}}"
-              matching_method: "{{job.parameters.matching_method}}"
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", matching_nb: "{{job.parameters.matching_nb}}", matching_method: "{{job.parameters.matching_method}}"}
         - task_key: model
-          depends_on:
-            - task_key: matching
+          depends_on: [{task_key: matching}]
           existing_cluster_id: ${var.compute_cluster_id}
           notebook_task:
             notebook_path: ../src/notebooks/registry/dispatch_model.py
-            base_parameters:
-              catalog: "{{job.parameters.catalog}}"
-              schema: "{{job.parameters.schema}}"
-              study_id: "{{job.parameters.study_id}}"
-              model_nb: "{{job.parameters.model_nb}}"
-              config_table: "study_config_modular"
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", model_nb: "{{job.parameters.model_nb}}", config_table: "study_config_modular"}
         - task_key: insights
-          depends_on:
-            - task_key: model
+          depends_on: [{task_key: model}]
           existing_cluster_id: ${var.compute_cluster_id}
           notebook_task:
             notebook_path: ../src/notebooks/registry/insights_modular.py
-            base_parameters:
-              catalog: "{{job.parameters.catalog}}"
-              schema: "{{job.parameters.schema}}"
-              study_id: "{{job.parameters.study_id}}"
-              config_table: "study_config_modular"
-      queue:
-        enabled: true
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular"}
+      queue: {enabled: true}
 
-    run_lme_study_cluster:
-      name: "[${bundle.target}] Eval Engine - Run Study (LME workstream, cluster)"
+    run_lme_mixed_cluster:
+      name: "[${bundle.target}] Eval Engine - Run LME (mixed-effects, cluster)"
       parameters:
-        - name: catalog
-          default: ${var.catalog}
-        - name: schema
-          default: ${var.schema}
-        - name: study_id
-          default: "M_LME_004"
+        - {name: catalog, default: "${var.catalog}"}
+        - {name: schema, default: "${var.schema}"}
+        - {name: study_id, default: "M_LME_MIXED"}
       tasks:
-        - task_key: feature_lme
+        - task_key: feature_lme_mixed
           existing_cluster_id: ${var.compute_cluster_id}
           notebook_task:
-            notebook_path: ../src/notebooks/registry/feature_lme.py
-            base_parameters:
-              catalog: "{{job.parameters.catalog}}"
-              schema: "{{job.parameters.schema}}"
-              study_id: "{{job.parameters.study_id}}"
-              config_table: "study_config_modular"
+            notebook_path: ../src/notebooks/registry/feature_lme_mixed.py
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular"}
         - task_key: quality_gate
-          depends_on:
-            - task_key: feature_lme
-          condition_task:
-            op: "EQUAL_TO"
-            left: "{{tasks.feature_lme.values.quality_passed}}"
-            right: "true"
-        - task_key: matching_lme
-          depends_on:
-            - task_key: quality_gate
-              outcome: "true"
+          depends_on: [{task_key: feature_lme_mixed}]
+          condition_task: {op: "EQUAL_TO", left: "{{tasks.feature_lme_mixed.values.quality_passed}}", right: "true"}
+        - task_key: matching_lme_mixed
+          depends_on: [{task_key: quality_gate, outcome: "true"}]
           existing_cluster_id: ${var.compute_cluster_id}
           notebook_task:
-            notebook_path: ../src/notebooks/registry/matching_lme.py
-            base_parameters:
-              catalog: "{{job.parameters.catalog}}"
-              schema: "{{job.parameters.schema}}"
-              study_id: "{{job.parameters.study_id}}"
-        - task_key: model_lme
-          depends_on:
-            - task_key: matching_lme
+            notebook_path: ../src/notebooks/registry/matching_lme_mixed.py
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}"}
+        - task_key: model_lme_mixed
+          depends_on: [{task_key: matching_lme_mixed}]
           existing_cluster_id: ${var.compute_cluster_id}
           notebook_task:
-            notebook_path: ../src/notebooks/registry/model_lme.py
-            base_parameters:
-              catalog: "{{job.parameters.catalog}}"
-              schema: "{{job.parameters.schema}}"
-              study_id: "{{job.parameters.study_id}}"
-              config_table: "study_config_modular"
+            notebook_path: ../src/notebooks/registry/model_lme_mixed.py
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular"}
         - task_key: insights
-          depends_on:
-            - task_key: model_lme
+          depends_on: [{task_key: model_lme_mixed}]
           existing_cluster_id: ${var.compute_cluster_id}
           notebook_task:
             notebook_path: ../src/notebooks/registry/insights_modular.py
-            base_parameters:
-              catalog: "{{job.parameters.catalog}}"
-              schema: "{{job.parameters.schema}}"
-              study_id: "{{job.parameters.study_id}}"
-              config_table: "study_config_modular"
-      queue:
-        enabled: true
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular"}
+      queue: {enabled: true}
+
+    run_lme_growth_cluster:
+      name: "[${bundle.target}] Eval Engine - Run LME (growth-curve, cluster)"
+      parameters:
+        - {name: catalog, default: "${var.catalog}"}
+        - {name: schema, default: "${var.schema}"}
+        - {name: study_id, default: "M_LME_GROWTH"}
+      tasks:
+        - task_key: feature_lme_growth
+          existing_cluster_id: ${var.compute_cluster_id}
+          notebook_task:
+            notebook_path: ../src/notebooks/registry/feature_lme_growth.py
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular"}
+        - task_key: quality_gate
+          depends_on: [{task_key: feature_lme_growth}]
+          condition_task: {op: "EQUAL_TO", left: "{{tasks.feature_lme_growth.values.quality_passed}}", right: "true"}
+        - task_key: matching_lme_growth
+          depends_on: [{task_key: quality_gate, outcome: "true"}]
+          existing_cluster_id: ${var.compute_cluster_id}
+          notebook_task:
+            notebook_path: ../src/notebooks/registry/matching_lme_growth.py
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}"}
+        - task_key: model_lme_growth
+          depends_on: [{task_key: matching_lme_growth}]
+          existing_cluster_id: ${var.compute_cluster_id}
+          notebook_task:
+            notebook_path: ../src/notebooks/registry/model_lme_growth.py
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular"}
+        - task_key: insights
+          depends_on: [{task_key: model_lme_growth}]
+          existing_cluster_id: ${var.compute_cluster_id}
+          notebook_task:
+            notebook_path: ../src/notebooks/registry/insights_modular.py
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular"}
+      queue: {enabled: true}
 
     eval_engine_modular_cluster:
       name: "[${bundle.target}] Eval Engine - MODULAR (branch, cluster)"
       parameters:
-        - name: catalog
-          default: ${var.catalog}
-        - name: schema
-          default: ${var.schema}
+        - {name: catalog, default: "${var.catalog}"}
+        - {name: schema, default: "${var.schema}"}
       tasks:
         - task_key: load_config_branched
           existing_cluster_id: ${var.compute_cluster_id}
           notebook_task:
             notebook_path: ../src/notebooks/registry/load_config_branched.py
-            base_parameters:
-              catalog: "{{job.parameters.catalog}}"
-              schema: "{{job.parameters.schema}}"
-              config_table: "study_config_modular"
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", config_table: "study_config_modular"}
         - task_key: branch_standard
-          depends_on:
-            - task_key: load_config_branched
-          condition_task:
-            op: "EQUAL_TO"
-            left: "{{tasks.load_config_branched.values.has_standard}}"
-            right: "true"
+          depends_on: [{task_key: load_config_branched}]
+          condition_task: {op: "EQUAL_TO", left: "{{tasks.load_config_branched.values.has_standard}}", right: "true"}
         - task_key: run_standard_studies
-          depends_on:
-            - task_key: branch_standard
-              outcome: "true"
+          depends_on: [{task_key: branch_standard, outcome: "true"}]
           for_each_task:
             inputs: "{{tasks.load_config_branched.values.standard_studies}}"
             concurrency: 4
@@ -199,35 +155,21 @@ resources:
               task_key: run_standard
               run_job_task:
                 job_id: ${resources.jobs.run_study_modular_cluster.id}
-                job_parameters:
-                  catalog: "{{job.parameters.catalog}}"
-                  schema: "{{job.parameters.schema}}"
-                  study_id: "{{input.study_id}}"
-                  feature_nb: "{{input.feature_nb}}"
-                  matching_nb: "{{input.matching_nb}}"
-                  matching_method: "{{input.matching_method}}"
-                  model_nb: "{{input.model_nb}}"
-        - task_key: branch_lme
-          depends_on:
-            - task_key: load_config_branched
-          condition_task:
-            op: "EQUAL_TO"
-            left: "{{tasks.load_config_branched.values.has_lme}}"
-            right: "true"
-        - task_key: run_lme_studies
-          depends_on:
-            - task_key: branch_lme
-              outcome: "true"
-          for_each_task:
-            inputs: "{{tasks.load_config_branched.values.lme_studies}}"
-            concurrency: 4
-            task:
-              task_key: run_lme
-              run_job_task:
-                job_id: ${resources.jobs.run_lme_study_cluster.id}
-                job_parameters:
-                  catalog: "{{job.parameters.catalog}}"
-                  schema: "{{job.parameters.schema}}"
-                  study_id: "{{input.study_id}}"
-      queue:
-        enabled: true
+                job_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{input.study_id}}", feature_nb: "{{input.feature_nb}}", matching_nb: "{{input.matching_nb}}", matching_method: "{{input.matching_method}}", model_nb: "{{input.model_nb}}"}
+        - task_key: branch_lme_mixed
+          depends_on: [{task_key: load_config_branched}]
+          condition_task: {op: "EQUAL_TO", left: "{{tasks.load_config_branched.values.has_lme_mixed}}", right: "true"}
+        - task_key: run_lme_mixed
+          depends_on: [{task_key: branch_lme_mixed, outcome: "true"}]
+          run_job_task:
+            job_id: ${resources.jobs.run_lme_mixed_cluster.id}
+            job_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}"}
+        - task_key: branch_lme_growth
+          depends_on: [{task_key: load_config_branched}]
+          condition_task: {op: "EQUAL_TO", left: "{{tasks.load_config_branched.values.has_lme_growth}}", right: "true"}
+        - task_key: run_lme_growth
+          depends_on: [{task_key: branch_lme_growth, outcome: "true"}]
+          run_job_task:
+            job_id: ${resources.jobs.run_lme_growth_cluster.id}
+            job_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}"}
+      queue: {enabled: true}

@@ -5,7 +5,7 @@
 # MAGIC One model, one notebook, one owner. Estimates the Average Treatment effect on the
 # MAGIC Treated as the weighted mean outcome difference on the matched cohort, with a bootstrap
 # MAGIC 95% CI, and appends one row to `evaluation_results`. A different team's model is a
-# MAGIC different notebook (`model_did`, `model_lme`, ...) — they never touch this file.
+# MAGIC different notebook (`model_did`, `model_lme_mixed`, ...) — they never touch this file.
 
 # COMMAND ----------
 
