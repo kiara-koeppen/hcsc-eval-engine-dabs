@@ -1,24 +1,17 @@
 # =============================================================================
 # MODULAR / MULTI-TEAM TRACK  (NON-SERVERLESS / existing cluster)
 # =============================================================================
-# Identical pipeline to resources/modular.job.yml, but every notebook task runs
-# on an EXISTING all-purpose cluster instead of serverless. Use this in
-# workspaces where serverless is not enabled (HCSC today).
+# Same config-driven branch as resources/modular.job.yml, but every notebook task
+# runs on an EXISTING all-purpose cluster (for workspaces without serverless, e.g.
+# HCSC today). Set the cluster once via the `compute_cluster_id` bundle variable:
 #
-# Set the cluster once via the bundle variable `compute_cluster_id`:
+#   CID=0712-123456-abcde12
+#   databricks bundle deploy                     -t dev --var="compute_cluster_id=$CID"
+#   databricks bundle run setup_modular_cluster      -t dev --var="compute_cluster_id=$CID"
+#   databricks bundle run eval_engine_modular_cluster -t dev --var="compute_cluster_id=$CID"
 #
-#   databricks bundle deploy -t dev --var="compute_cluster_id=0712-123456-abcde12"
-#   databricks bundle run setup_modular_cluster   -t dev --var="compute_cluster_id=0712-123456-abcde12"
-#   databricks bundle run eval_engine_modular_cluster -t dev --var="compute_cluster_id=0712-123456-abcde12"
-#
-# Notes:
-#   - Only notebook tasks take compute. condition_task, for_each_task, and
-#     run_job_task have no cluster binding.
-#   - The dispatchers use dbutils.notebook.run(), and those child notebook runs
-#     execute on the SAME cluster as the dispatcher -- so no serverless needed
-#     anywhere in the flow.
-#   - This is exactly the "attach the existing cluster key to each task" step,
-#     captured as code so you never hand-edit it per task or per environment.
+# Only notebook tasks bind to the cluster; condition_task / for_each_task / run_job_task
+# need no compute.
 # =============================================================================
 resources:
   jobs:
@@ -37,7 +30,7 @@ resources:
         enabled: true
 
     run_study_modular_cluster:
-      name: "[${bundle.target}] Eval Engine - Run Study (modular, cluster)"
+      name: "[${bundle.target}] Eval Engine - Run Study (standard, cluster)"
       parameters:
         - name: catalog
           default: ${var.catalog}
@@ -53,7 +46,6 @@ resources:
           default: "exact"
         - name: model_nb
           default: "model_att"
-
       tasks:
         - task_key: feature
           existing_cluster_id: ${var.compute_cluster_id}
@@ -65,7 +57,6 @@ resources:
               study_id: "{{job.parameters.study_id}}"
               feature_nb: "{{job.parameters.feature_nb}}"
               config_table: "study_config_modular"
-
         - task_key: quality_gate
           depends_on:
             - task_key: feature
@@ -73,7 +64,6 @@ resources:
             op: "EQUAL_TO"
             left: "{{tasks.feature.values.quality_passed}}"
             right: "true"
-
         - task_key: matching
           depends_on:
             - task_key: quality_gate
@@ -87,7 +77,6 @@ resources:
               study_id: "{{job.parameters.study_id}}"
               matching_nb: "{{job.parameters.matching_nb}}"
               matching_method: "{{job.parameters.matching_method}}"
-
         - task_key: model
           depends_on:
             - task_key: matching
@@ -100,7 +89,6 @@ resources:
               study_id: "{{job.parameters.study_id}}"
               model_nb: "{{job.parameters.model_nb}}"
               config_table: "study_config_modular"
-
         - task_key: insights
           depends_on:
             - task_key: model
@@ -112,36 +100,103 @@ resources:
               schema: "{{job.parameters.schema}}"
               study_id: "{{job.parameters.study_id}}"
               config_table: "study_config_modular"
-
       queue:
         enabled: true
 
-    eval_engine_modular_cluster:
-      name: "[${bundle.target}] Eval Engine - MODULAR (cluster)"
+    run_lme_study_cluster:
+      name: "[${bundle.target}] Eval Engine - Run Study (LME workstream, cluster)"
       parameters:
         - name: catalog
           default: ${var.catalog}
         - name: schema
           default: ${var.schema}
-
+        - name: study_id
+          default: "M_LME_004"
       tasks:
-        - task_key: load_config_modular
+        - task_key: feature_lme
           existing_cluster_id: ${var.compute_cluster_id}
           notebook_task:
-            notebook_path: ../src/notebooks/registry/load_config_modular.py
+            notebook_path: ../src/notebooks/registry/feature_lme.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              study_id: "{{job.parameters.study_id}}"
+              config_table: "study_config_modular"
+        - task_key: quality_gate
+          depends_on:
+            - task_key: feature_lme
+          condition_task:
+            op: "EQUAL_TO"
+            left: "{{tasks.feature_lme.values.quality_passed}}"
+            right: "true"
+        - task_key: matching_lme
+          depends_on:
+            - task_key: quality_gate
+              outcome: "true"
+          existing_cluster_id: ${var.compute_cluster_id}
+          notebook_task:
+            notebook_path: ../src/notebooks/registry/matching_lme.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              study_id: "{{job.parameters.study_id}}"
+        - task_key: model_lme
+          depends_on:
+            - task_key: matching_lme
+          existing_cluster_id: ${var.compute_cluster_id}
+          notebook_task:
+            notebook_path: ../src/notebooks/registry/model_lme.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              study_id: "{{job.parameters.study_id}}"
+              config_table: "study_config_modular"
+        - task_key: insights
+          depends_on:
+            - task_key: model_lme
+          existing_cluster_id: ${var.compute_cluster_id}
+          notebook_task:
+            notebook_path: ../src/notebooks/registry/insights_modular.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              study_id: "{{job.parameters.study_id}}"
+              config_table: "study_config_modular"
+      queue:
+        enabled: true
+
+    eval_engine_modular_cluster:
+      name: "[${bundle.target}] Eval Engine - MODULAR (branch, cluster)"
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+      tasks:
+        - task_key: load_config_branched
+          existing_cluster_id: ${var.compute_cluster_id}
+          notebook_task:
+            notebook_path: ../src/notebooks/registry/load_config_branched.py
             base_parameters:
               catalog: "{{job.parameters.catalog}}"
               schema: "{{job.parameters.schema}}"
               config_table: "study_config_modular"
-
-        - task_key: run_all_studies
+        - task_key: branch_standard
           depends_on:
-            - task_key: load_config_modular
+            - task_key: load_config_branched
+          condition_task:
+            op: "EQUAL_TO"
+            left: "{{tasks.load_config_branched.values.has_standard}}"
+            right: "true"
+        - task_key: run_standard_studies
+          depends_on:
+            - task_key: branch_standard
+              outcome: "true"
           for_each_task:
-            inputs: "{{tasks.load_config_modular.values.studies}}"
+            inputs: "{{tasks.load_config_branched.values.standard_studies}}"
             concurrency: 4
             task:
-              task_key: run_study
+              task_key: run_standard
               run_job_task:
                 job_id: ${resources.jobs.run_study_modular_cluster.id}
                 job_parameters:
@@ -152,6 +207,27 @@ resources:
                   matching_nb: "{{input.matching_nb}}"
                   matching_method: "{{input.matching_method}}"
                   model_nb: "{{input.model_nb}}"
-
+        - task_key: branch_lme
+          depends_on:
+            - task_key: load_config_branched
+          condition_task:
+            op: "EQUAL_TO"
+            left: "{{tasks.load_config_branched.values.has_lme}}"
+            right: "true"
+        - task_key: run_lme_studies
+          depends_on:
+            - task_key: branch_lme
+              outcome: "true"
+          for_each_task:
+            inputs: "{{tasks.load_config_branched.values.lme_studies}}"
+            concurrency: 4
+            task:
+              task_key: run_lme
+              run_job_task:
+                job_id: ${resources.jobs.run_lme_study_cluster.id}
+                job_parameters:
+                  catalog: "{{job.parameters.catalog}}"
+                  schema: "{{job.parameters.schema}}"
+                  study_id: "{{input.study_id}}"
       queue:
         enabled: true

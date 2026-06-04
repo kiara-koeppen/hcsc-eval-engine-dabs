@@ -1,28 +1,33 @@
 ---
-title: "MODULAR — Registry dispatch (separate team-owned notebooks) + for_each"
+title: "MODULAR — config-driven BRANCH: standard for_each loop + separate LME workstream"
 ---
 flowchart TD
   classDef cond fill:#FDEBD0,stroke:#B9770E,color:#7E5109,font-weight:bold;
   classDef nb fill:#E8F6F3,stroke:#148F77,color:#0E6251;
   classDef leaf fill:#FEF9E7,stroke:#B7950B,color:#7D6608;
   classDef ctrl fill:#EBF5FB,stroke:#2E86C1,color:#1B4F72,font-weight:bold;
-  classDef stop fill:#F2F3F4,stroke:#909497,color:#5F6A6A;
 
-  CFG["study_config_modular (the registry)<br/><i>per study: feature_nb - matching_nb - model_nb</i>"]:::ctrl --> LC
-  LC["load_config_modular<br/><i>emit studies[]</i>"]:::ctrl --> FE["for_each(studies)<br/>concurrency = 4"]:::ctrl
-  FE --> F
+  CFG["study_config_modular<br/><i>model_family = standard | lme</i>"]:::ctrl --> LC
+  LC["load_config_branched<br/><i>split into standard[] and lme[]</i>"]:::ctrl --> BS{{"branch:<br/>has_standard?"}}:::cond
+  LC --> BL{{"branch:<br/>has_lme?"}}:::cond
 
-  subgraph RS["run_study_modular  (runs once per study — flat DAG, never changes)"]
+  %% ---- Branch 1: standard family, shared for_each loop ----
+  BS -->|true| FES["for_each(standard studies)<br/>concurrency = 4"]:::ctrl
+  subgraph RS["run_study_modular  (shared standard pipeline)"]
     direction LR
     F["dispatch_feature"]:::nb --> Q{{"quality_gate"}}:::cond
-    Q -->|pass| M["dispatch_matching"]:::nb
-    M --> MD["dispatch_model"]:::nb
-    MD --> I["insights"]:::nb
-    Q -->|fail| X["stop<br/>(study skipped)"]:::stop
+    Q -->|pass| M["dispatch_matching"]:::nb --> MD["dispatch_model"]:::nb --> I["insights"]:::nb
   end
+  FES --> F
+  MD -. "runs the config-named leaf" .-> SL["feature_standard / matching_standard /<br/>matching_stratified / model_att / model_did"]:::leaf
 
-  F -. "dbutils.notebook.run(feature_nb)" .-> FL["feature_standard / feature_lme"]:::leaf
-  M -. "dbutils.notebook.run(matching_nb)" .-> ML["matching_standard / matching_stratified"]:::leaf
-  MD -. "dbutils.notebook.run(model_nb)" .-> MDL["model_att / model_did / model_lme"]:::leaf
+  %% ---- Branch 2: LME family, its OWN separate workstream ----
+  BL -->|true| FEL["for_each(lme studies)<br/>concurrency = 4"]:::ctrl
+  subgraph RL["run_lme_study  (DEDICATED LME workstream — its own notebooks)"]
+    direction LR
+    LF["feature_lme"]:::leaf --> LQ{{"quality_gate"}}:::cond
+    LQ -->|pass| LM["matching_lme"]:::leaf --> LMD["model_lme"]:::leaf --> LI["insights"]:::nb
+  end
+  FEL --> LF
 
-  N["Each dispatcher runs the config-named LEAF notebook as its own child run (full visibility).<br/>Leaves are SEPARATE files owned by separate teams - no shared mega-notebook to merge.<br/>Add a model = new leaf + one config row. LME just points at feature_lme + model_lme.<br/>Same flat DAG at 4 studies or 400; for_each fans out and parallelizes."]:::ctrl
+  N["The config DECIDES, then the flow BRANCHES. Standard models (ATT/ATE/DID/pre-post) share<br/>one pipeline and fan out with for_each. LME is structurally different (multi performance period),<br/>so it breaks off into its OWN workstream with its OWN notebooks and can diverge freely.<br/>Add another odd-shaped model = another branch + workstream. Add a standard model = a leaf + a config row."]:::ctrl

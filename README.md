@@ -86,42 +86,51 @@ parameterized notebook" approach did not fit:
    performance periods), whose feature engineering and data shape differ from the standard
    single pre/post studies.
 
-The **modular track** (`resources/modular.job.yml`) reconciles all three while keeping the
-flat `for_each` DAG. It uses a **registry + dispatcher** pattern:
-
-- `study_config_modular` names a **leaf notebook per stage** for each study
-  (`feature_nb`, `matching_nb`, `model_nb`). That table is the registry.
-- Each stage in `run_study_modular` is a thin **dispatcher** that runs the config-named leaf
-  via `dbutils.notebook.run(<leaf>, ...)`. (Databricks job `notebook_path` is static and
-  **cannot** be set from a parameter — verified against the docs — so we select the notebook
-  in code, where the path is a runtime string.)
-- Each leaf runs as its **own child run**, so you keep full per-notebook visibility in the
-  run tree (this answers the "do we still see which notebook ran?" question).
+The **modular track** (`resources/modular.job.yml`) handles all three with a **config-driven
+branch**: the config decides, then the flow splits into two workstreams.
 
 ```
-study_config_modular ─(load_config)─▶ for_each(studies) ─▶ run_study_modular (per study):
-   dispatch_feature ─▶ quality_gate ─true─▶ dispatch_matching ─▶ dispatch_model ─▶ insights
-        │                                        │                     │
-        └ runs feature_nb        runs matching_nb┘        runs model_nb┘   (separate leaf notebooks)
+study_config_modular ─(load_config_branched)─▶ split by model_family
+   ├─ branch: has_standard? ─true─▶ for_each(standard studies) ─▶ run_study_modular
+   │                                   dispatch_feature ─▶ gate ─▶ dispatch_matching ─▶ dispatch_model ─▶ insights
+   │                                   (shared pipeline; dispatchers run the config-named leaf per stage)
+   └─ branch: has_lme?      ─true─▶ for_each(lme studies)      ─▶ run_lme_study  (SEPARATE workstream)
+                                       feature_lme ─▶ gate ─▶ matching_lme ─▶ model_lme ─▶ insights
+                                       (its OWN dedicated notebooks; free to diverge in shape)
 ```
 
 See `docs/modular.png` for the diagram.
+
+- **Standard family** (ATT, ATE, DID, pre/post — single baseline + performance period) shares
+  one per-study pipeline (`run_study_modular`) and fans out with `for_each`. Each stage is a
+  thin **dispatcher** that runs the config-named leaf via `dbutils.notebook.run(<leaf>, ...)`,
+  so every model stays in its **own** notebook owned by its team. (Job `notebook_path` is
+  static and cannot be set from a parameter — verified against the docs — so the notebook is
+  selected in code, where the path is a runtime string. Each leaf runs as its own child run,
+  preserving per-notebook visibility.)
+- **LME** is structurally different (one baseline + several performance periods), so it does
+  **not** ride the standard pipeline. The config branches it into a **separate workstream**
+  (`run_lme_study`) with its **own** notebooks (`feature_lme → matching_lme → model_lme`),
+  which can diverge freely. It still fans out with its own `for_each` over the LME studies.
 
 **What this buys each requirement:**
 
 | Requirement | How the modular track meets it |
 |-------------|-------------------------------|
-| Separate, team-owned notebooks | Every method/model is its **own leaf** under `src/notebooks/registry/`. No shared mega-notebook to merge. |
-| Plug in a new method/model | Add a leaf notebook + one row in `study_config_modular`. No edit to dispatchers or the DAG. (`matching_stratified` in this repo demonstrates a "third team" contributing a method.) |
-| Structurally different LME | `M_LME_004` points at `feature_lme` (multi-period) + `model_lme` (longitudinal), and still **reuses** `matching_standard`. Same flat DAG; only the referenced leaves differ. |
-| Observability | Leaves run as child runs via `dbutils.notebook.run`, visible in the run tree. |
+| Separate, team-owned notebooks | Every method/model is its **own file** under `src/notebooks/registry/`. No shared mega-notebook to merge. |
+| Plug in a new standard method/model | Add a leaf notebook + one row in `study_config_modular`. No DAG edit. (`matching_stratified` demonstrates a "third team" contributing a method.) |
+| Structurally different model (LME) | It **branches into its own workstream** (`run_lme_study`) with its own notebooks, not forced through the standard pipeline. Add another odd-shaped model later = another branch + workstream. |
+| Observability | Standard leaves run as child runs via `dbutils.notebook.run`; the LME workstream's stages are first-class tasks. Both fully visible in the run tree. |
 
-**Leaf notebooks** (`src/notebooks/registry/`): `feature_standard`, `feature_lme`,
-`matching_standard` (exact/knn/ipw), `matching_stratified`, `model_att`, `model_did`,
-`model_lme`. Dispatchers: `dispatch_feature`, `dispatch_matching`, `dispatch_model`.
+**Standard leaves / dispatchers** (`src/notebooks/registry/`): `feature_standard`,
+`matching_standard` (exact/knn/ipw), `matching_stratified`, `model_att`, `model_did`, run by
+`dispatch_feature` / `dispatch_matching` / `dispatch_model`. **LME workstream notebooks:**
+`feature_lme`, `matching_lme`, `model_lme`. Routing: `load_config_branched`.
 
-> Both the modular (serverless) fan-out across all 4 studies **and** the non-serverless
-> cluster variant were deployed and run green in `kk_test`, June 2026.
+> The branched engine was deployed and run green in `kk_test` (June 2026): `load_config_branched`
+> routed both branches, the 3 standard studies ran through the shared `for_each` loop, and the
+> LME study ran through its own `run_lme_study` workstream (`feature_lme → matching_lme →
+> model_lme`). A non-serverless cluster variant (`*_cluster` jobs) mirrors the same branch.
 
 ---
 
@@ -262,18 +271,19 @@ hcsc-eval-engine-dabs/
         ├── modeling.py                  # dispatcher: att | ate | did | gee | mixed (+ bootstrap CI)
         ├── insights.py                  # plain-language interpretation
         ├── registry/                    # MODULAR track: separate, team-owned notebooks
-        │   ├── dispatch_feature.py      # runs the config-named feature leaf, sets quality_passed
-        │   ├── dispatch_matching.py     # runs the config-named matching leaf
-        │   ├── dispatch_model.py        # runs the config-named model leaf
-        │   ├── load_config_modular.py   # emits studies[] (incl. leaf names) for for_each
+        │   ├── load_config_branched.py  # splits studies by model_family; drives the branch
+        │   ├── dispatch_feature.py      # (standard) runs the config-named feature leaf, sets quality_passed
+        │   ├── dispatch_matching.py     # (standard) runs the config-named matching leaf
+        │   ├── dispatch_model.py        # (standard) runs the config-named model leaf
         │   ├── insights_modular.py      # plain-language interpretation (reads study_config_modular)
-        │   ├── feature_standard.py      # leaf: single baseline + performance period
-        │   ├── feature_lme.py           # leaf: multi performance periods (structurally different)
-        │   ├── matching_standard.py     # leaf: exact | knn | ipw
-        │   ├── matching_stratified.py   # leaf: a "third team" plug-in matching method
-        │   ├── model_att.py             # leaf (ATT team)
-        │   ├── model_did.py             # leaf (DID team)
-        │   └── model_lme.py             # leaf (longitudinal team)
+        │   ├── feature_standard.py      # standard leaf: single baseline + performance period
+        │   ├── matching_standard.py     # standard leaf: exact | knn | ipw
+        │   ├── matching_stratified.py   # standard leaf: a "third team" plug-in matching method
+        │   ├── model_att.py             # standard leaf (ATT team)
+        │   ├── model_did.py             # standard leaf (DID team)
+        │   ├── feature_lme.py           # LME workstream: multi performance periods
+        │   ├── matching_lme.py          # LME workstream: dedicated matching
+        │   └── model_lme.py             # LME workstream: longitudinal estimator
         └── _legacy/                     # notebooks used by the "before" job
             ├── prep_and_route.py        # emits chosen_matching / chosen_model / quality_passed
             ├── exact_matching.py

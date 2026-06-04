@@ -85,4 +85,9 @@ else:
 
 # COMMAND ----------
 
+# Works two ways:
+#  - called directly as a job notebook_task (the LME workstream): the downstream
+#    quality_gate condition_task reads this task value.
+#  - called via a dispatcher (dbutils.notebook.run): the caller reads the exit string.
+dbutils.jobs.taskValues.set(key="quality_passed", value=str(quality_passed).lower())
 dbutils.notebook.exit(str(quality_passed).lower())
