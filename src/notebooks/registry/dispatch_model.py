@@ -14,12 +14,14 @@ dbutils.widgets.text("schema", "eval_engine_demo", "Schema")
 dbutils.widgets.text("study_id", "M_ATT_001", "Study ID")
 dbutils.widgets.text("model_nb", "model_att", "Model leaf notebook")
 dbutils.widgets.text("config_table", "study_config_modular", "Config table")
+dbutils.widgets.text("job_run_id", "", "Job run id (for reproducibility stamping)")
 
 catalog = dbutils.widgets.get("catalog")
 schema = dbutils.widgets.get("schema")
 study_id = dbutils.widgets.get("study_id")
 model_nb = dbutils.widgets.get("model_nb")
 config_table = dbutils.widgets.get("config_table")
+job_run_id = dbutils.widgets.get("job_run_id")
 print(f"[{study_id}] dispatch_model -> running leaf '{model_nb}'")
 
 # COMMAND ----------
@@ -32,6 +34,7 @@ estimate = dbutils.notebook.run(
         "schema": schema,
         "study_id": study_id,
         "config_table": config_table,
+        "job_run_id": job_run_id,
     },
 )
 print(f"[{study_id}] leaf '{model_nb}' returned estimate={estimate}")

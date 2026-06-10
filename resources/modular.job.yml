@@ -66,7 +66,7 @@ resources:
           depends_on: [{task_key: matching}]
           notebook_task:
             notebook_path: ../src/notebooks/registry/dispatch_model.py
-            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", model_nb: "{{job.parameters.model_nb}}", config_table: "study_config_modular"}
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", model_nb: "{{job.parameters.model_nb}}", config_table: "study_config_modular", job_run_id: "{{job.run_id}}"}
         - task_key: insights
           depends_on: [{task_key: model}]
           notebook_task:
@@ -98,7 +98,7 @@ resources:
           depends_on: [{task_key: matching_lme_mixed}]
           notebook_task:
             notebook_path: ../src/notebooks/registry/model_lme_mixed.py
-            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular"}
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular", job_run_id: "{{job.run_id}}"}
         - task_key: insights
           depends_on: [{task_key: model_lme_mixed}]
           notebook_task:
@@ -130,7 +130,7 @@ resources:
           depends_on: [{task_key: matching_lme_growth}]
           notebook_task:
             notebook_path: ../src/notebooks/registry/model_lme_growth.py
-            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular"}
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular", job_run_id: "{{job.run_id}}"}
         - task_key: insights
           depends_on: [{task_key: model_lme_growth}]
           notebook_task:
@@ -141,14 +141,22 @@ resources:
     # ---- Top level: read config, then branch into the loop + each LME workstream ----
     eval_engine_modular:
       name: "[${bundle.target}] Eval Engine - MODULAR (branch: standard loop + LME workstreams)"
+      # Failure alerts: emails the address in var.notification_email when any task fails,
+      # naming the failed task with a deep link -- so you do not have to hunt for it.
+      email_notifications:
+        on_failure:
+          - ${var.notification_email}
       parameters:
         - {name: catalog, default: "${var.catalog}"}
         - {name: schema, default: "${var.schema}"}
+        # Optional: comma-separated study_ids to run on demand (overrides the active flag).
+        # Leave blank to run all active studies.
+        - {name: study_ids, default: ""}
       tasks:
         - task_key: load_config_branched
           notebook_task:
             notebook_path: ../src/notebooks/registry/load_config_branched.py
-            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", config_table: "study_config_modular"}
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", config_table: "study_config_modular", study_ids: "{{job.parameters.study_ids}}"}
 
         # Branch A: standard family -> shared for_each loop
         - task_key: branch_standard

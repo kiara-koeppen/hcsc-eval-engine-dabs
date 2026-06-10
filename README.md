@@ -220,6 +220,23 @@ Add another **structurally-different** model (its own branch): add its notebook 
 `src/notebooks/registry/`, a config row with `model_family = <family>`, a `has_<family>` flag
 in `load_config_branched.py`, a `run_<family>` job, and one branch in `eval_engine_modular`.
 
+### Operational controls (selective runs, reproducibility, alerts)
+
+- **`active` flag (don't-run).** `study_config_modular` has an `active` boolean. A full run
+  executes only `active = true` studies, so retired/old configs stay in the table for
+  reference without auto-executing. (`M_ATT_ARCHIVED` ships `active = false` to show this.)
+- **Run a single study / subset on demand.** Pass the `study_ids` job parameter (comma list)
+  to run exactly those, ignoring `active` — useful for one-off re-runs, including archived
+  studies: `databricks bundle run eval_engine_modular --params study_ids=M_ATT_001`.
+- **Reproducibility stamps.** Every `evaluation_results` row records `config_version`,
+  `data_version` (Delta versions of `study_config_modular` and the cohort table) and
+  `job_run_id`. To reproduce a result: time-travel both tables to those versions and re-run.
+- **Failure alerts.** The engine jobs send `on_failure` email to `var.notification_email`,
+  naming the failed task with a deep link.
+- **Partial re-run after failure.** Intermediate outputs persist as Delta tables
+  (`feat_<id>`, `matched_<id>`), so a Databricks **Repair Run** reruns only the failed task
+  and downstream (e.g. from `model`), reusing the completed feature/matching stages.
+
 ### Run without serverless (existing cluster)
 
 For workspaces where serverless is not enabled, use the `*_cluster` jobs and point them at

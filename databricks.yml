@@ -54,6 +54,9 @@ variables:
       non-serverless path. HCSC: override it with your own cluster, either with
       --var="compute_cluster_id=<your-id>" or by editing this default.
     default: "0216-222923-3n4nk95u"
+  notification_email:
+    description: "Email address that receives on_failure alerts for the engine jobs."
+    default: "kiara.koeppen@databricks.com"
 
 # -----------------------------------------------------------------------------
 # Targets: each target = one environment. In real use, dev/test/prod would be

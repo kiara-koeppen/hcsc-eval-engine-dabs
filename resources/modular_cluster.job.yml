@@ -53,7 +53,7 @@ resources:
           existing_cluster_id: ${var.compute_cluster_id}
           notebook_task:
             notebook_path: ../src/notebooks/registry/dispatch_model.py
-            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", model_nb: "{{job.parameters.model_nb}}", config_table: "study_config_modular"}
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", model_nb: "{{job.parameters.model_nb}}", config_table: "study_config_modular", job_run_id: "{{job.run_id}}"}
         - task_key: insights
           depends_on: [{task_key: model}]
           existing_cluster_id: ${var.compute_cluster_id}
@@ -88,7 +88,7 @@ resources:
           existing_cluster_id: ${var.compute_cluster_id}
           notebook_task:
             notebook_path: ../src/notebooks/registry/model_lme_mixed.py
-            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular"}
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular", job_run_id: "{{job.run_id}}"}
         - task_key: insights
           depends_on: [{task_key: model_lme_mixed}]
           existing_cluster_id: ${var.compute_cluster_id}
@@ -123,7 +123,7 @@ resources:
           existing_cluster_id: ${var.compute_cluster_id}
           notebook_task:
             notebook_path: ../src/notebooks/registry/model_lme_growth.py
-            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular"}
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular", job_run_id: "{{job.run_id}}"}
         - task_key: insights
           depends_on: [{task_key: model_lme_growth}]
           existing_cluster_id: ${var.compute_cluster_id}
@@ -134,15 +134,19 @@ resources:
 
     eval_engine_modular_cluster:
       name: "[${bundle.target}] Eval Engine - MODULAR (branch, cluster)"
+      email_notifications:
+        on_failure:
+          - ${var.notification_email}
       parameters:
         - {name: catalog, default: "${var.catalog}"}
         - {name: schema, default: "${var.schema}"}
+        - {name: study_ids, default: ""}
       tasks:
         - task_key: load_config_branched
           existing_cluster_id: ${var.compute_cluster_id}
           notebook_task:
             notebook_path: ../src/notebooks/registry/load_config_branched.py
-            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", config_table: "study_config_modular"}
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", config_table: "study_config_modular", study_ids: "{{job.parameters.study_ids}}"}
         - task_key: branch_standard
           depends_on: [{task_key: load_config_branched}]
           condition_task: {op: "EQUAL_TO", left: "{{tasks.load_config_branched.values.has_standard}}", right: "true"}

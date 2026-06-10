@@ -42,24 +42,31 @@ spark.sql(f"USE SCHEMA {schema}")
 
 from pyspark.sql import Row
 
-# study_id, study_name, vendor, model_family, feature_nb, matching_nb, matching_method, model_nb, min_quality_score
+# study_id, study_name, vendor, model_family, feature_nb, matching_nb, matching_method, model_nb, min_quality_score, active
+#
+# `active` is the "don't run" flag: load_config only runs active studies, so old/retired
+# configs can stay in the table for reference without auto-executing. M_ATT_ARCHIVED below
+# is active=False to demonstrate this -- it stays in the table but is skipped on a full run
+# (you can still run it on demand via the study_ids parameter).
 registry_rows = [
-    ("M_ATT_001",    "Diabetes Care Mgmt (ATT)",     "VendorA Health",   "standard",
-     "feature_standard",   "matching_standard",   "exact",      "model_att",       0.80),
-    ("M_DID_002",    "CHF Remote Monitoring (DID)",   "VendorB Cardio",   "standard",
-     "feature_standard",   "matching_standard",   "knn",        "model_did",       0.80),
-    ("M_STRAT_003",  "Maternity Support (ATT/strat)", "VendorC Maternal", "standard",
-     "feature_standard",   "matching_stratified", "stratified", "model_att",       0.75),
-    ("M_LME_MIXED",  "Wellness Longitudinal (mixed)", "VendorD Wellness", "lme_mixed",
-     "feature_lme_mixed",  "matching_lme_mixed",  "knn",        "model_lme_mixed", 0.80),
-    ("M_LME_GROWTH", "Chronic Care Longitudinal (growth)","VendorE Chronic","lme_growth",
-     "feature_lme_growth", "matching_lme_growth", "knn",        "model_lme_growth",0.80),
+    ("M_ATT_001",     "Diabetes Care Mgmt (ATT)",          "VendorA Health",   "standard",
+     "feature_standard",   "matching_standard",   "exact",      "model_att",        0.80, True),
+    ("M_DID_002",     "CHF Remote Monitoring (DID)",        "VendorB Cardio",   "standard",
+     "feature_standard",   "matching_standard",   "knn",        "model_did",        0.80, True),
+    ("M_STRAT_003",   "Maternity Support (ATT/strat)",      "VendorC Maternal", "standard",
+     "feature_standard",   "matching_stratified", "stratified", "model_att",        0.75, True),
+    ("M_LME_MIXED",   "Wellness Longitudinal (mixed)",      "VendorD Wellness", "lme_mixed",
+     "feature_lme_mixed",  "matching_lme_mixed",  "knn",        "model_lme_mixed",  0.80, True),
+    ("M_LME_GROWTH",  "Chronic Care Longitudinal (growth)", "VendorE Chronic",  "lme_growth",
+     "feature_lme_growth", "matching_lme_growth", "knn",        "model_lme_growth", 0.80, True),
+    ("M_ATT_ARCHIVED","Legacy Diabetes Study (archived)",   "VendorA Health",   "standard",
+     "feature_standard",   "matching_standard",   "exact",      "model_att",        0.80, False),
 ]
 
 registry_df = spark.createDataFrame([
     Row(study_id=r[0], study_name=r[1], vendor=r[2], model_family=r[3],
         feature_nb=r[4], matching_nb=r[5], matching_method=r[6], model_nb=r[7],
-        min_quality_score=float(r[8]))
+        min_quality_score=float(r[8]), active=bool(r[9]))
     for r in registry_rows
 ])
 registry_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable("study_config_modular")
@@ -77,9 +84,10 @@ import pandas as pd
 rng = np.random.default_rng(7)
 
 single_specs = {  # study_id: (n_per_arm, true_effect, missing_rate)
-    "M_ATT_001":   (1200, -450.0, 0.02),
-    "M_DID_002":   (900,  -1.20,  0.03),
-    "M_STRAT_003": (1500, -300.0, 0.04),
+    "M_ATT_001":      (1200, -450.0, 0.02),
+    "M_DID_002":      (900,  -1.20,  0.03),
+    "M_STRAT_003":    (1500, -300.0, 0.04),
+    "M_ATT_ARCHIVED": (1000, -400.0, 0.02),   # archived (active=False) but runnable on demand
 }
 
 def make_arm(study_id, n, treated, true_effect, missing_rate):

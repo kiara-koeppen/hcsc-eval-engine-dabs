@@ -12,11 +12,13 @@ dbutils.widgets.text("catalog", "kk_test", "Catalog")
 dbutils.widgets.text("schema", "eval_engine_demo", "Schema")
 dbutils.widgets.text("study_id", "M_DID_002", "Study ID")
 dbutils.widgets.text("config_table", "study_config_modular", "Config table")
+dbutils.widgets.text("job_run_id", "", "Job run id (reproducibility stamp)")
 
 catalog = dbutils.widgets.get("catalog")
 schema = dbutils.widgets.get("schema")
 study_id = dbutils.widgets.get("study_id")
 config_table = dbutils.widgets.get("config_table")
+job_run_id = dbutils.widgets.get("job_run_id")
 print(f"[{study_id}] leaf=model_did")
 
 # COMMAND ----------
@@ -30,6 +32,15 @@ matched = spark.table(f"{catalog}.{schema}.matched_{study_id.lower()}").toPandas
 cfg = (spark.table(f"{catalog}.{schema}.{config_table}")
             .where(f"study_id='{study_id}'").collect()[0])
 matching_method = cfg["matching_method"]
+
+def _delta_version(tbl):
+    try:
+        from pyspark.sql import functions as F
+        return int(spark.sql(f"DESCRIBE HISTORY {tbl}").agg(F.max("version")).collect()[0][0])
+    except Exception:
+        return -1
+config_version = _delta_version(f"{catalog}.{schema}.{config_table}")
+data_version = _delta_version(f"{catalog}.{schema}.cohorts")
 
 def wmean(s, w):
     return float(np.average(np.asarray(s, float), weights=np.asarray(w, float)))
@@ -66,6 +77,7 @@ result = Row(
     ci_low=round(ci_low, 3), ci_high=round(ci_high, 3),
     naive_estimate=round(naive, 3),
     significant=bool(ci_low > 0 or ci_high < 0), source="modular",
+    config_version=config_version, data_version=data_version, job_run_id=job_run_id,
 )
 (spark.createDataFrame([result])
       .write.mode("append").option("mergeSchema", "true")
