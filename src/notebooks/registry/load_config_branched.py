@@ -44,9 +44,11 @@ else:
 rows = selected.collect()
 families = [(r["model_family"] or "standard") for r in rows]
 
+# Table-driven: emit only the KEY (study_id). The per-study settings (feature_nb,
+# matching_nb, matching_method, model_nb, periods, ...) are read from the config table
+# by the dispatchers/notebooks at runtime, not passed as widgets.
 standard_studies = [
-    {"study_id": r["study_id"], "feature_nb": r["feature_nb"], "matching_nb": r["matching_nb"],
-     "matching_method": r["matching_method"], "model_nb": r["model_nb"]}
+    {"study_id": r["study_id"]}
     for r in rows if (r["model_family"] or "standard") == "standard"
 ]
 

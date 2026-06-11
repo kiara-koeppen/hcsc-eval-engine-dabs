@@ -41,19 +41,17 @@ resources:
     # ---- STANDARD per-study pipeline (shared; dispatchers run team-owned leaves) ----
     run_study_modular:
       name: "[${bundle.target}] Eval Engine - Run Study (standard)"
+      # Table-driven: the job carries only the KEY (study_id). Each dispatcher reads the
+      # study's settings (which notebook, which method, periods) from study_config_modular.
       parameters:
         - {name: catalog, default: "${var.catalog}"}
         - {name: schema, default: "${var.schema}"}
         - {name: study_id, default: "M_ATT_001"}
-        - {name: feature_nb, default: "feature_standard"}
-        - {name: matching_nb, default: "matching_standard"}
-        - {name: matching_method, default: "exact"}
-        - {name: model_nb, default: "model_att"}
       tasks:
         - task_key: feature
           notebook_task:
             notebook_path: ../src/notebooks/registry/dispatch_feature.py
-            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", feature_nb: "{{job.parameters.feature_nb}}", config_table: "study_config_modular"}
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular"}
         - task_key: quality_gate
           depends_on: [{task_key: feature}]
           condition_task: {op: "EQUAL_TO", left: "{{tasks.feature.values.quality_passed}}", right: "true"}
@@ -61,12 +59,12 @@ resources:
           depends_on: [{task_key: quality_gate, outcome: "true"}]
           notebook_task:
             notebook_path: ../src/notebooks/registry/dispatch_matching.py
-            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", matching_nb: "{{job.parameters.matching_nb}}", matching_method: "{{job.parameters.matching_method}}"}
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular"}
         - task_key: model
           depends_on: [{task_key: matching}]
           notebook_task:
             notebook_path: ../src/notebooks/registry/dispatch_model.py
-            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", model_nb: "{{job.parameters.model_nb}}", config_table: "study_config_modular", job_run_id: "{{job.run_id}}"}
+            base_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{job.parameters.study_id}}", config_table: "study_config_modular", job_run_id: "{{job.run_id}}"}
         - task_key: insights
           depends_on: [{task_key: model}]
           notebook_task:
@@ -171,7 +169,7 @@ resources:
               task_key: run_standard
               run_job_task:
                 job_id: ${resources.jobs.run_study_modular.id}
-                job_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{input.study_id}}", feature_nb: "{{input.feature_nb}}", matching_nb: "{{input.matching_nb}}", matching_method: "{{input.matching_method}}", model_nb: "{{input.model_nb}}"}
+                job_parameters: {catalog: "{{job.parameters.catalog}}", schema: "{{job.parameters.schema}}", study_id: "{{input.study_id}}"}
 
         # Branch B: mixed-effects LME -> its own workstream
         - task_key: branch_lme_mixed

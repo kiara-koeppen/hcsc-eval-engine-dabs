@@ -27,11 +27,16 @@ import pandas as pd, numpy as np
 long = (spark.table(f"{catalog}.{schema}.cohorts_multiperiod").where(f"study_id = '{study_id}'").toPandas())
 cfg = spark.table(f"{catalog}.{schema}.{config_table}").where(f"study_id = '{study_id}'").collect()[0]
 min_quality = float(cfg["min_quality_score"])
+# Read the performance window from the config TABLE (not a widget). This is the value
+# HCSC tunes per study (e.g. 6- vs 12-month performance). It decides how many performance
+# periods this study uses.
+performance_months = int(cfg["performance_months"]) if "performance_months" in cfg.asDict() else 3
+print(f"[{study_id}] performance_months from config = {performance_months}")
 
 baseline = long[long["period"] == 0].copy()
 missing_fraction = float(baseline["risk_score"].isna().mean())
 baseline["risk_score"] = baseline["risk_score"].fillna(baseline["risk_score"].median())
-perf = long[long["period"] >= 1].copy()
+perf = long[(long["period"] >= 1) & (long["period"] <= performance_months)].copy()
 perf["risk_score"] = perf["risk_score"].fillna(baseline["risk_score"].median())
 n_t = int(baseline[baseline.treatment == 1].shape[0]); n_c = int(baseline[baseline.treatment == 0].shape[0])
 

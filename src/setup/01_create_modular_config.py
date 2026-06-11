@@ -42,31 +42,37 @@ spark.sql(f"USE SCHEMA {schema}")
 
 from pyspark.sql import Row
 
-# study_id, study_name, vendor, model_family, feature_nb, matching_nb, matching_method, model_nb, min_quality_score, active
+# columns: study_id, study_name, vendor, model_family, feature_nb, matching_nb,
+#          matching_method, model_nb, min_quality_score, active, baseline_months, performance_months
 #
 # `active` is the "don't run" flag: load_config only runs active studies, so old/retired
 # configs can stay in the table for reference without auto-executing. M_ATT_ARCHIVED below
-# is active=False to demonstrate this -- it stays in the table but is skipped on a full run
-# (you can still run it on demand via the study_ids parameter).
+# is active=False to demonstrate this -- it stays in the table but is skipped on a full run.
+#
+# `baseline_months` / `performance_months` are TUNABLE VALUES that live in the table, not in
+# widgets -- the same idea HCSC uses (e.g. a 6-month vs 12-month performance window). The LME
+# feature notebooks read `performance_months` from this row to decide how many performance
+# periods to use. Change the study's window by editing this column, no code or widget change.
 registry_rows = [
     ("M_ATT_001",     "Diabetes Care Mgmt (ATT)",          "VendorA Health",   "standard",
-     "feature_standard",   "matching_standard",   "exact",      "model_att",        0.80, True),
+     "feature_standard",   "matching_standard",   "exact",      "model_att",        0.80, True,  12, 1),
     ("M_DID_002",     "CHF Remote Monitoring (DID)",        "VendorB Cardio",   "standard",
-     "feature_standard",   "matching_standard",   "knn",        "model_did",        0.80, True),
+     "feature_standard",   "matching_standard",   "knn",        "model_did",        0.80, True,  12, 1),
     ("M_STRAT_003",   "Maternity Support (ATT/strat)",      "VendorC Maternal", "standard",
-     "feature_standard",   "matching_stratified", "stratified", "model_att",        0.75, True),
+     "feature_standard",   "matching_stratified", "stratified", "model_att",        0.75, True,  12, 1),
     ("M_LME_MIXED",   "Wellness Longitudinal (mixed)",      "VendorD Wellness", "lme_mixed",
-     "feature_lme_mixed",  "matching_lme_mixed",  "knn",        "model_lme_mixed",  0.80, True),
+     "feature_lme_mixed",  "matching_lme_mixed",  "knn",        "model_lme_mixed",  0.80, True,  12, 3),
     ("M_LME_GROWTH",  "Chronic Care Longitudinal (growth)", "VendorE Chronic",  "lme_growth",
-     "feature_lme_growth", "matching_lme_growth", "knn",        "model_lme_growth", 0.80, True),
+     "feature_lme_growth", "matching_lme_growth", "knn",        "model_lme_growth", 0.80, True,  12, 3),
     ("M_ATT_ARCHIVED","Legacy Diabetes Study (archived)",   "VendorA Health",   "standard",
-     "feature_standard",   "matching_standard",   "exact",      "model_att",        0.80, False),
+     "feature_standard",   "matching_standard",   "exact",      "model_att",        0.80, False, 12, 1),
 ]
 
 registry_df = spark.createDataFrame([
     Row(study_id=r[0], study_name=r[1], vendor=r[2], model_family=r[3],
         feature_nb=r[4], matching_nb=r[5], matching_method=r[6], model_nb=r[7],
-        min_quality_score=float(r[8]), active=bool(r[9]))
+        min_quality_score=float(r[8]), active=bool(r[9]),
+        baseline_months=int(r[10]), performance_months=int(r[11]))
     for r in registry_rows
 ])
 registry_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable("study_config_modular")

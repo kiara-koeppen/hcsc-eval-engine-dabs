@@ -220,6 +220,22 @@ Add another **structurally-different** model (its own branch): add its notebook 
 `src/notebooks/registry/`, a config row with `model_family = <family>`, a `has_<family>` flag
 in `load_config_branched.py`, a `run_<family>` job, and one branch in `eval_engine_modular`.
 
+### Config-table driven (no per-value widgets)
+
+The pipeline follows the "config table, not widgets" pattern: the job carries only the **key**
+(`study_id`), and the dispatchers/notebooks **read the per-study settings from
+`study_config_modular`** at runtime (which notebook to run, the matching method, the
+performance window, etc.). Nothing study-specific is typed into a widget or threaded as a job
+parameter.
+
+- `load_config_branched` emits only `study_id` per study.
+- `dispatch_feature` / `dispatch_matching` / `dispatch_model` read `feature_nb` / `matching_nb` +
+  `matching_method` / `model_nb` from the config row and run the named leaf.
+- `baseline_months` / `performance_months` are tunable values that live in the table. The LME
+  feature notebooks read `performance_months` to decide how many performance periods to use, so
+  changing a study's window (e.g. 6 vs 12 month) is a one-cell config edit. Verified: setting
+  `performance_months = 2` made the LME feature use exactly 2 periods, no code change.
+
 ### Operational controls (selective runs, reproducibility, alerts)
 
 - **`active` flag (don't-run).** `study_config_modular` has an `active` boolean. A full run
