@@ -17,7 +17,6 @@
 dbutils.widgets.text("catalog", "kk_test", "Catalog")
 dbutils.widgets.text("schema", "eval_engine_demo", "Schema")
 dbutils.widgets.text("study_id", "M_STRAT_003", "Study ID")
-dbutils.widgets.text("matching_method", "stratified", "Matching method")
 
 catalog = dbutils.widgets.get("catalog")
 schema = dbutils.widgets.get("schema")

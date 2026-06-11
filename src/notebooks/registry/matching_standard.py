@@ -3,7 +3,8 @@
 # MAGIC # LEAF: matching_standard
 # MAGIC
 # MAGIC Shared matching infrastructure: `exact` | `knn` | `ipw`, selected by the
-# MAGIC `matching_method` parameter. Reads `feat_<study_id>`, writes `matched_<study_id>` with a
+# MAGIC `matching_method` value READ FROM THE CONFIG TABLE for this study (no widget). Reads
+# MAGIC `feat_<study_id>`, writes `matched_<study_id>` with a
 # MAGIC `weight` column the model stage consumes. Reused by both standard and LME studies
 # MAGIC (matching operates on patient-level baseline covariates, which both produce).
 
@@ -12,13 +13,17 @@
 dbutils.widgets.text("catalog", "kk_test", "Catalog")
 dbutils.widgets.text("schema", "eval_engine_demo", "Schema")
 dbutils.widgets.text("study_id", "M_ATT_001", "Study ID")
-dbutils.widgets.text("matching_method", "exact", "Matching method")
+dbutils.widgets.text("config_table", "study_config_modular", "Config table")
 
 catalog = dbutils.widgets.get("catalog")
 schema = dbutils.widgets.get("schema")
 study_id = dbutils.widgets.get("study_id")
-matching_method = dbutils.widgets.get("matching_method")
-print(f"[{study_id}] leaf=matching_standard method={matching_method}")
+config_table = dbutils.widgets.get("config_table")
+
+# Read the matching method from the config TABLE (not a widget), keyed by study_id.
+matching_method = (spark.table(f"{catalog}.{schema}.{config_table}")
+                        .where(f"study_id = '{study_id}'").collect()[0]["matching_method"])
+print(f"[{study_id}] leaf=matching_standard method={matching_method} (read from config)")
 
 # COMMAND ----------
 

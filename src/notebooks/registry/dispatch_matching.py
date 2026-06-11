@@ -24,15 +24,15 @@ config_table = dbutils.widgets.get("config_table")
 cfg = (spark.table(f"{catalog}.{schema}.{config_table}")
             .where(f"study_id = '{study_id}'").collect()[0])
 matching_nb = cfg["matching_nb"]
-matching_method = cfg["matching_method"]
-print(f"[{study_id}] dispatch_matching -> config says matching_nb='{matching_nb}' method='{matching_method}'")
+print(f"[{study_id}] dispatch_matching -> config says matching_nb='{matching_nb}'")
 
 # COMMAND ----------
 
+# The leaf reads its own matching_method from the config table; we pass only the key.
 counts = dbutils.notebook.run(
     matching_nb,
     3600,
-    {"catalog": catalog, "schema": schema, "study_id": study_id, "matching_method": matching_method},
+    {"catalog": catalog, "schema": schema, "study_id": study_id, "config_table": config_table},
 )
 print(f"[{study_id}] leaf '{matching_nb}' returned n_treated,n_control = {counts}")
 
