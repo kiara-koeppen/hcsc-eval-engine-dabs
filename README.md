@@ -140,6 +140,37 @@ See `docs/modular.png` for the diagram.
 
 ---
 
+## PE pipeline — faithful reference of HCSC's documented architecture
+
+`resources/pe_pipeline.job.yml` + `src/pe_pipeline/` implement HCSC's documented
+"Evaluation Engine - Pipeline Architecture" 1:1, so they can read it next to their own doc.
+Verified end to end in `kk_test`.
+
+- **Shared init (`common_nb`)** — every phase notebook starts with `%run ./common_nb`, which
+  reads the key params from widgets, loads the study's config row into a `pe_config` dict,
+  defines `log_step()`, and sets up MLflow (optional). Mirrors their `Config_Utility/common_nb`.
+- **`nextphase` routing** — each phase notebook returns the name of the next notebook to run
+  (or `None`); `run_pe_study` runs it. This is their "set nextphase to the next notebook name."
+- **Conditional matching** — Phase 1 routes to `matching` only if the config says the model
+  needs it, otherwise straight to `model_<type>` (their "Matching runs only when required").
+- **Model fallback** — `model_wilcoxon` checks its symmetry assumption and, if violated, routes
+  to the configured `fallback_model` (`model_sign_test`) — their "Wilcoxon → Sign Test on failure."
+- **`log_step` + MLflow observability** — every step writes a row to `pe_step_log`
+  (run_id, step_id/name, status, pass_description, error_msg, n_input/n_treated, execution_time);
+  models also log to MLflow when available.
+- **Same run id across steps** — the job passes `{{job.run_id}}` as `orchestration_run_id`,
+  threaded into every step, so a failed run repairs/re-routes under the same id (their hard requirement).
+
+Run it: `databricks bundle run setup_pe -t dev`, then
+`databricks bundle run pe_pipeline -t dev --params study_id=PE_ATT_001` (matching path) or
+`--params study_id=PE_WILCOXON_003` (no-matching + Wilcoxon→Sign-Test fallback). Files:
+`src/pe_pipeline/` (`common_nb`, `feature_engineering`, `matching`, `model_att`/`model_did`/`model_wilcoxon`/`model_sign_test`, `run_pe_study`) and `src/setup/02_create_pe_config.py`.
+
+> Note: `pe_pipeline` runs on serverless here; for a no-serverless workspace, bind its notebook
+> task to an existing cluster the same way `resources/modular_cluster.job.yml` does.
+
+---
+
 ## Architecture / data flow
 
 ```

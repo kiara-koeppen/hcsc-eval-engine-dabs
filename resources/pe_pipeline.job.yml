@@ -1,0 +1,48 @@
+# =============================================================================
+# PE PIPELINE -- faithful reference of HCSC's documented architecture
+# =============================================================================
+# Per-study, config-driven, with nextphase routing (incl. model fallback),
+# conditional matching, a shared common_nb init, and log_step + MLflow
+# observability. Maps 1:1 to HCSC's "Evaluation Engine - Pipeline Architecture"
+# doc. Compute is serverless here; for a no-serverless workspace bind tasks to
+# an existing cluster the same way resources/modular_cluster.job.yml does.
+#
+# Jobs:
+#   setup_pe     -- one-time: pe_study_config + pe_cohorts
+#   pe_pipeline  -- per-study orchestrator (key = study_id, HCSC's pe_jobname)
+# =============================================================================
+resources:
+  jobs:
+
+    setup_pe:
+      name: "[${bundle.target}] PE Pipeline - Setup (config + cohorts)"
+      tasks:
+        - task_key: create_pe_config
+          notebook_task:
+            notebook_path: ../src/setup/02_create_pe_config.py
+            base_parameters: {catalog: "${var.catalog}", schema: "${var.schema}"}
+      queue: {enabled: true}
+
+    pe_pipeline:
+      name: "[${bundle.target}] PE Pipeline (config-driven, nextphase routing)"
+      # HCSC-style job parameters. study_id is the key (their pe_jobname);
+      # orchestration_run_id is threaded into every step so they share one run id.
+      parameters:
+        - {name: catalog, default: "${var.catalog}"}
+        - {name: schema, default: "${var.schema}"}
+        - {name: study_id, default: "PE_ATT_001"}
+        - {name: pe_environment, default: "${bundle.target}"}
+        - {name: run_type, default: "Pipeline"}
+      tasks:
+        - task_key: run_pe_study
+          notebook_task:
+            notebook_path: ../src/pe_pipeline/run_pe_study.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              schema: "{{job.parameters.schema}}"
+              study_id: "{{job.parameters.study_id}}"
+              config_table: "pe_study_config"
+              pe_environment: "{{job.parameters.pe_environment}}"
+              run_type: "{{job.parameters.run_type}}"
+              orchestration_run_id: "{{job.run_id}}"
+      queue: {enabled: true}
