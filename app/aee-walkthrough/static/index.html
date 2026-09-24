@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Evaluation Engine Walkthrough</title>
+<meta name="description" content="An executive walkthrough of HCSC's Automated Evaluation Engine - from 16 weeks of manual analysis to an evidence-based recommendation in hours. Click a phase to expand.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --ground:#EBEFF1; --surface:#FFFFFF; --surface-2:#F4F7F8;
+    --ink:#132229; --muted:#57676F; --line:#D6DFE2;
+    --teal:#0E6E78; --teal-deep:#0A4A50; --teal-soft:#E4F0F1;
+    --accent:#FF3621; --accent-soft:#FFEDE9; --accent-deep:#C22A18;
+    --good:#0C7C63; --good-soft:#E2F1EC; --warn:#B8860B; --warn-soft:#FBF2DC;
+    --shadow:0 1px 2px rgba(19,34,41,.05), 0 8px 24px rgba(19,34,41,.07);
+    --font-display:"Archivo",-apple-system,"Segoe UI",sans-serif;
+    --font-body:"IBM Plex Sans",-apple-system,"Segoe UI",sans-serif;
+    --font-mono:"IBM Plex Mono",ui-monospace,"SF Mono",monospace;
+  }
+  :root:not([data-theme="light"]){ @media (prefers-color-scheme: dark){
+    --ground:#0B1519; --surface:#132329; --surface-2:#0F1E23;
+    --ink:#E9F1F2; --muted:#94A7AE; --line:#243940;
+    --teal:#4FC4CE; --teal-deep:#8FE0E6; --teal-soft:#12303655;
+    --accent:#FF6E57; --accent-soft:#2A130E; --accent-deep:#FF8A73;
+    --good:#4CC79F; --good-soft:#0E2A24; --warn:#E0B341; --warn-soft:#2A2410;
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.45);
+  }}
+  :root[data-theme="dark"]{
+    --ground:#0B1519; --surface:#132329; --surface-2:#0F1E23;
+    --ink:#E9F1F2; --muted:#94A7AE; --line:#243940;
+    --teal:#4FC4CE; --teal-deep:#8FE0E6; --teal-soft:#12303655;
+    --accent:#FF6E57; --accent-soft:#2A130E; --accent-deep:#FF8A73;
+    --good:#4CC79F; --good-soft:#0E2A24; --warn:#E0B341; --warn-soft:#2A2410;
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.45);
+  }
+  *{box-sizing:border-box}
+  [hidden]{display:none !important}
+  html,body{min-height:100%}
+  body{
+    margin:0; background:var(--ground); color:var(--ink);
+    font-family:var(--font-body); line-height:1.45; -webkit-font-smoothing:antialiased;
+    display:flex; align-items:center; justify-content:center; padding:clamp(14px,2.2vw,30px);
+  }
+  .slide{
+    width:100%; max-width:1200px; background:var(--surface); position:relative;
+    border:1px solid var(--line); border-radius:16px; box-shadow:var(--shadow);
+    padding:clamp(20px,2.8vw,40px); display:flex; flex-direction:column; gap:clamp(13px,1.9vh,20px);
+  }
+  .eyebrow{
+    font-family:var(--font-mono); font-size:.72rem; font-weight:600; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--teal); display:flex; align-items:center; gap:.6em;
+  }
+  .eyebrow::before{content:""; width:26px; height:2px; background:var(--accent)}
+  h1{
+    font-family:var(--font-display); font-weight:800; color:var(--ink);
+    font-size:clamp(1.6rem,3.2vw,2.7rem); line-height:1.02; margin:.24em 0 .12em;
+    letter-spacing:-.017em; text-wrap:balance;
+  }
+  .sub{ font-size:clamp(.92rem,1.25vw,1.08rem); color:var(--muted); max-width:74ch; }
+  .sub b{ color:var(--ink); font-weight:600; }
+  .hint{ font-family:var(--font-mono); font-size:.72rem; color:var(--accent-deep); letter-spacing:.02em; display:inline-flex; align-items:center; gap:.5em; }
+  .hint::before{ content:"▸"; }
+
+  /* ---- headline stats ---- */
+  .stats{ display:flex; flex-wrap:wrap; align-items:flex-start; gap:clamp(14px,2.6vw,34px); margin-top:.5em; }
+  .stats .s{ display:flex; flex-direction:column; gap:3px; }
+  .stats .v{ font-family:var(--font-display); font-weight:800; font-size:clamp(1.4rem,2.8vw,2.2rem); color:var(--ink); line-height:.95; letter-spacing:-.02em; }
+  .stats .v.hot{ color:var(--accent-deep); } .stats .v.good{ color:var(--good); }
+  .stats .l{ font-size:.74rem; color:var(--muted); max-width:20ch; }
+  .stats .ar{ font-family:var(--font-display); font-weight:700; color:var(--teal); font-size:clamp(1.2rem,2.4vw,1.9rem); align-self:center; }
+
+  /* ---- clickable process spine ---- */
+  .flow{ display:flex; align-items:stretch; gap:0; flex-wrap:wrap; }
+  .step{
+    flex:1 1 0; min-width:150px; text-align:left; cursor:pointer; font-family:var(--font-body);
+    background:var(--surface-2); border:1.5px solid var(--line); border-radius:12px;
+    padding:clamp(11px,1.3vw,15px); display:flex; flex-direction:column; gap:.35em;
+    transition:border-color .15s, background .15s, transform .15s, box-shadow .15s; color:var(--ink);
+  }
+  .step:hover{ transform:translateY(-2px); box-shadow:var(--shadow); }
+  .step:focus-visible{ outline:2px solid var(--teal); outline-offset:2px; }
+  .step[aria-selected="true"]{ border-color:var(--teal); background:var(--teal-soft); }
+  .step .top{ display:flex; align-items:center; gap:.5em; }
+  .step .n{
+    font-family:var(--font-mono); font-size:.72rem; font-weight:600; color:#fff; background:var(--teal);
+    width:22px; height:22px; border-radius:6px; display:grid; place-items:center; flex:0 0 auto;
+  }
+  .step h3{ font-family:var(--font-display); font-weight:700; font-size:clamp(.86rem,1.05vw,.98rem);
+    margin:0; color:var(--ink); letter-spacing:-.01em; }
+  .step p{ margin:0; font-size:clamp(.72rem,.9vw,.8rem); color:var(--muted); }
+  .arrow{ align-self:center; color:var(--teal); font-size:1.2rem; padding:0 .2em; flex:0 0 auto; font-family:var(--font-display); }
+  @media (max-width:860px){
+    .flow{ flex-direction:column; } .step{ min-width:0; } .arrow{ transform:rotate(90deg); padding:.04em 0; }
+  }
+
+  /* ---- detail panel ---- */
+  .detail{ border:1px solid var(--line); border-left:4px solid var(--teal); border-radius:12px;
+    background:var(--surface); padding:clamp(16px,2vw,24px); min-height:250px; }
+  .panel{ display:grid; grid-template-columns:1.5fr 1fr; gap:clamp(16px,2.4vw,34px); }
+  @media (max-width:860px){ .panel{ grid-template-columns:1fr; gap:16px; } }
+  .panel .lead{ font-family:var(--font-display); font-weight:700; font-size:clamp(1.02rem,1.5vw,1.24rem);
+    color:var(--ink); margin:0 0 .5em; letter-spacing:-.01em; }
+  .panel .what{ font-size:clamp(.85rem,1.1vw,.95rem); color:var(--muted); margin:0 0 1em; }
+  .panel ul{ margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:.55em; }
+  .panel li{ font-size:clamp(.82rem,1.05vw,.92rem); color:var(--ink); padding-left:1.3em; position:relative; }
+  .panel li::before{ content:""; position:absolute; left:0; top:.5em; width:7px; height:7px; border-radius:2px; background:var(--teal); }
+  .panel li b{ font-weight:600; color:var(--teal-deep); }
+  .gatebadge{ display:inline-flex; align-items:center; gap:.4em; font-family:var(--font-mono); font-size:.66rem;
+    font-weight:600; letter-spacing:.06em; text-transform:uppercase; padding:.28em .6em; border-radius:999px; margin-top:.95em; }
+  .gatebadge.stop{ color:var(--accent-deep); background:var(--accent-soft); }
+  .gatebadge.remediate{ color:var(--warn); background:var(--warn-soft); }
+  .gatebadge.good{ color:var(--good); background:var(--good-soft); }
+
+  /* right column of the panel */
+  .aside{ display:flex; flex-direction:column; gap:14px; align-self:start; }
+  .uses{ background:var(--surface-2); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .uses .cap{ font-family:var(--font-mono); font-size:.64rem; font-weight:600; letter-spacing:.12em;
+    text-transform:uppercase; color:var(--muted); margin-bottom:.7em; }
+  .uses .tag{ display:block; font-size:clamp(.8rem,1vw,.9rem); padding:.32em 0; border-top:1px solid var(--line); }
+  .uses .tag:first-of-type{ border-top:none; }
+  .uses .tag b{ font-weight:600; color:var(--ink); }
+  .uses .tag span{ color:var(--muted); }
+
+  /* mini scorecard (shown in the Scorecard phase aside) */
+  .mini{ border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .mini .mh{ background:var(--teal); color:#fff; padding:9px 13px; font-family:var(--font-mono); font-size:.64rem; letter-spacing:.1em; text-transform:uppercase; }
+  .mini .mb{ padding:13px; display:grid; grid-template-columns:1fr 1fr; gap:9px; }
+  .mini .mt{ background:var(--surface-2); border:1px solid var(--line); border-radius:8px; padding:9px 11px; }
+  .mini .mt .mv{ font-family:var(--font-display); font-weight:800; font-size:1.05rem; letter-spacing:-.02em; }
+  .mini .mt .mv.good{ color:var(--good); } .mini .mt .mv.hot{ color:var(--accent-deep); }
+  .mini .mt .ml{ font-size:.66rem; color:var(--muted); margin-top:1px; }
+
+  /* mini log (shown in Model / gate phases) */
+  .logmini{ width:100%; border-collapse:collapse; font-size:.74rem; }
+  .logmini td{ padding:5px 8px; border-bottom:1px solid var(--line); color:var(--ink); vertical-align:top; }
+  .logmini tr:last-child td{ border-bottom:none; }
+  .st{ font-family:var(--font-mono); font-size:.62rem; font-weight:600; padding:.14em .5em; border-radius:5px; white-space:nowrap; }
+  .st.pass{ color:var(--good); background:var(--good-soft); }
+  .st.warn{ color:var(--warn); background:var(--warn-soft); }
+
+  /* ---- built strip ---- */
+  /* ---- app tab bar ---- */
+  .tabs{ display:flex; gap:6px; flex-wrap:wrap; border-bottom:1px solid var(--line); padding-bottom:2px; }
+  .tab{ font-family:var(--font-body); font-weight:600; font-size:clamp(.82rem,1.05vw,.94rem); cursor:pointer;
+    background:none; border:none; color:var(--muted); padding:.5em .9em; border-radius:9px 9px 0 0; position:relative;
+    display:inline-flex; align-items:center; gap:.5em; transition:color .15s, background .15s; }
+  .tab .tn{ font-family:var(--font-mono); font-size:.62rem; font-weight:600; color:var(--muted); background:var(--surface-2);
+    border:1px solid var(--line); border-radius:5px; padding:.05em .4em; }
+  .tab:hover{ color:var(--ink); }
+  .tab[aria-selected="true"]{ color:var(--teal-deep); }
+  .tab[aria-selected="true"] .tn{ color:#fff; background:var(--teal); border-color:var(--teal); }
+  .tab[aria-selected="true"]::after{ content:""; position:absolute; left:.6em; right:.6em; bottom:-3px; height:3px; background:var(--teal); border-radius:3px; }
+  .view{ display:flex; flex-direction:column; gap:clamp(13px,1.9vh,20px); }
+
+  /* ---- full scorecard (The result view) ---- */
+  .card{ border:1px solid var(--line); border-radius:14px; background:var(--surface-2); overflow:hidden; }
+  .card .hd{ background:var(--teal); color:#fff; padding:clamp(14px,1.8vw,20px) clamp(16px,2vw,24px); }
+  .card .hd .k{ font-family:var(--font-mono); font-size:.68rem; letter-spacing:.12em; text-transform:uppercase; opacity:.85; }
+  .card .hd .t{ font-family:var(--font-display); font-weight:700; font-size:clamp(1.1rem,1.7vw,1.4rem); margin-top:.2em; }
+  .card .bd{ padding:clamp(16px,2vw,24px); display:grid; grid-template-columns:1.1fr 1fr; gap:clamp(16px,2.4vw,30px); }
+  @media (max-width:860px){ .card .bd{ grid-template-columns:1fr; } }
+  .tiles{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .tile{ background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .tile .tv{ font-family:var(--font-display); font-weight:800; font-size:clamp(1.2rem,2vw,1.6rem); letter-spacing:-.02em; }
+  .tile .tv.good{ color:var(--good); } .tile .tv.hot{ color:var(--accent-deep); }
+  .tile .tl{ font-size:.72rem; color:var(--muted); margin-top:2px; }
+  .verdict{ background:var(--good-soft); border:1px solid var(--line); border-left:4px solid var(--good); border-radius:10px; padding:14px 16px; }
+  .verdict .vk{ font-family:var(--font-mono); font-size:.64rem; letter-spacing:.12em; text-transform:uppercase; color:var(--good); font-weight:600; }
+  .verdict p{ margin:.4em 0 0; font-size:clamp(.85rem,1.1vw,.95rem); color:var(--ink); }
+  .verdict b{ color:var(--good); }
+
+  /* ---- trust view ---- */
+  .duo{ display:grid; grid-template-columns:1fr 1fr; gap:clamp(14px,2vw,22px); }
+  @media (max-width:860px){ .duo{ grid-template-columns:1fr; } }
+  .trio{ display:grid; grid-template-columns:repeat(3,1fr); gap:clamp(14px,2vw,22px); }
+  @media (max-width:860px){ .trio{ grid-template-columns:1fr; } }
+  .fact{ border:1px solid var(--line); border-radius:12px; background:var(--surface-2); padding:clamp(14px,1.8vw,20px); }
+  .fact .fk{ font-family:var(--font-mono); font-size:.66rem; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--teal); }
+  .fact .fk.hot{ color:var(--accent-deep); } .fact .fk.warn{ color:var(--warn); }
+  .fact .fh{ font-family:var(--font-display); font-weight:700; font-size:clamp(1rem,1.4vw,1.2rem); margin:.35em 0 .3em; }
+  .fact p{ margin:0; font-size:clamp(.82rem,1.05vw,.92rem); color:var(--muted); }
+  .fact p b{ color:var(--ink); font-weight:600; }
+  .logwrap{ border:1px solid var(--line); border-radius:12px; background:var(--surface-2); padding:8px clamp(10px,1.4vw,16px); }
+  .logt{ width:100%; border-collapse:collapse; font-size:clamp(.76rem,.95vw,.86rem); }
+  .logt th{ text-align:left; font-family:var(--font-mono); font-weight:600; font-size:.64rem; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--muted); padding:8px 10px; border-bottom:1px solid var(--line); }
+  .logt td{ padding:8px 10px; border-bottom:1px solid var(--line); color:var(--ink); }
+  .logt tr:last-child td{ border-bottom:none; }
+
+  /* ---- scale band (many studies at once) ---- */
+  .scale{ border:1px dashed var(--line); border-radius:12px; background:var(--surface-2); padding:14px clamp(14px,1.8vw,20px); }
+  .scale .sc{ font-family:var(--font-mono); font-size:.66rem; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--teal); margin-bottom:.8em; }
+  .scale .row{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .scale .cfg{ font-family:var(--font-mono); font-size:.74rem; background:var(--teal); color:#fff; border-radius:8px; padding:.5em .7em; }
+  .scale .studies{ display:flex; gap:7px; flex-wrap:wrap; }
+  .scale .stub{ border:1px solid var(--line); background:var(--surface); border-radius:8px; padding:.4em .6em; font-size:.74rem; color:var(--ink); }
+  .scale .stub b{ color:var(--teal-deep); }
+  .scale .to{ color:var(--teal); font-weight:700; font-family:var(--font-display); font-size:1.1rem; }
+  .scale .out{ font-size:.8rem; color:var(--muted); margin-top:.7em; }
+  .scale .out b{ color:var(--ink); font-weight:600; }
+  .nextline{ font-size:clamp(.74rem,.95vw,.82rem); color:var(--muted); margin:.2em 0 0; }
+  .nextline b{ color:var(--teal-deep); font-weight:600; }
+
+  .built{ display:flex; flex-direction:column; gap:.55em; }
+  .built .cap{ font-family:var(--font-mono); font-size:.66rem; font-weight:600; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
+  .chips{ display:flex; flex-wrap:wrap; gap:6px; }
+  .chip{ border:1px solid var(--line); border-radius:999px; padding:.3em .75em; font-size:clamp(.7rem,.9vw,.8rem); background:var(--surface); color:var(--ink); }
+  .chip b{ font-weight:600; } .chip span{ color:var(--muted); font-size:.88em; }
+  footer{ font-size:clamp(.68rem,.85vw,.75rem); color:var(--muted); border-top:1px solid var(--line);
+    padding-top:.85em; display:flex; justify-content:space-between; gap:1em; flex-wrap:wrap; }
+  footer .val b{ color:var(--good); font-weight:600; }
+  .themetog{ position:absolute; top:14px; right:16px; font-family:var(--font-mono); font-size:.66rem; color:var(--muted);
+    background:none; border:none; cursor:pointer; letter-spacing:.06em; }
+  @media (prefers-reduced-motion: reduce){ .step{ transition:none; } }
+</style>
+</head>
+<body>
+<div class="slide">
+  <button class="themetog" id="themetog" title="Toggle light/dark">◐ theme</button>
+
+  <header>
+    <div class="eyebrow">HCSC Program Evaluation &nbsp;×&nbsp; Databricks · Art of the Possible</div>
+    <h1>Program evaluation that took a quarter, now runs before lunch.</h1>
+    <p class="sub">The <b>Automated Evaluation Engine (AEE)</b> turns a manual, weeks-long analytics process into one automated, governed pipeline. Load the studies, hit run, and the engine pulls the data, builds the measures, matches comparison groups, measures the impact, checks its own work at every step, and lands an <b>evidence-based recommendation</b> a leader can act on. <span class="hint">click into each view, and each phase, to explore</span></p>
+    <div class="stats">
+      <div class="s"><span class="v">10-16 wks</span><span class="l">of manual analysis per study, before</span></div>
+      <div class="ar">→</div>
+      <div class="s"><span class="v hot">~4 hrs</span><span class="l">end to end, automated (one ran in 3h 27m)</span></div>
+      <div class="s"><span class="v good">~15</span><span class="l">studies already live through the engine</span></div>
+      <div class="s"><span class="v">10-20</span><span class="l">studies run in parallel, no extra effort</span></div>
+    </div>
+  </header>
+
+  <div class="tabs" role="tablist" aria-label="Views">
+    <button class="tab" data-view="result" role="tab" aria-selected="true"><span class="tn">01</span> The result</button>
+    <button class="tab" data-view="how" role="tab" aria-selected="false"><span class="tn">02</span> How it works</button>
+    <button class="tab" data-view="trust" role="tab" aria-selected="false"><span class="tn">03</span> Why you can trust it</button>
+    <button class="tab" data-view="strategy" role="tab" aria-selected="false"><span class="tn">04</span> The strategy</button>
+  </div>
+
+  <div class="view" id="v-how">
+  <div class="flow" role="tablist" aria-label="Evaluation engine phases">
+    <button class="step" role="tab" data-step="1" aria-selected="false" aria-controls="e1"><div class="top"><span class="n">1</span><h3>Ingest</h3></div><p>Pull the data; set the before and after periods.</p></button>
+    <div class="arrow" aria-hidden="true">→</div>
+    <button class="step" role="tab" data-step="2" aria-selected="false" aria-controls="e2"><div class="top"><span class="n">2</span><h3>Feature engineering</h3></div><p>Build the outcomes and factors for each study.</p></button>
+    <div class="arrow" aria-hidden="true">→</div>
+    <button class="step" role="tab" data-step="3" aria-selected="false" aria-controls="e3"><div class="top"><span class="n">3</span><h3>Data cleaning</h3></div><p>Handle gaps and outliers, with quality checks.</p></button>
+    <div class="arrow" aria-hidden="true">→</div>
+    <button class="step" role="tab" data-step="4" aria-selected="false" aria-controls="e4"><div class="top"><span class="n">4</span><h3>Match</h3></div><p>Build a fair, like-for-like comparison group.</p></button>
+    <div class="arrow" aria-hidden="true">→</div>
+    <button class="step" role="tab" data-step="5" aria-selected="false" aria-controls="e5"><div class="top"><span class="n">5</span><h3>Model</h3></div><p>Measure the real impact, with automatic self-correction.</p></button>
+    <div class="arrow" aria-hidden="true">→</div>
+    <button class="step" role="tab" data-step="6" aria-selected="false" aria-controls="e6"><div class="top"><span class="n">6</span><h3>Scorecard</h3></div><p>Standardized results → the front end.</p></button>
+  </div>
+
+  <div class="detail" data-active="1">
+    <!-- PHASE 1 -->
+    <div class="panel" id="e1" role="tabpanel" data-p="1">
+      <div>
+        <p class="lead">Pull the data and set the study's time windows.</p>
+        <p class="what">The engine reads the trusted, governed data, then sets the <b>before</b> and <b>after</b> periods the study needs. Some studies compare one period before and after; others track several periods over time.</p>
+        <ul>
+          <li>Every setting for a study lives in <b>one setup table</b>, so you change a study by editing a setting, not writing code.</li>
+          <li>It handles both one-time before-and-after studies and studies that track <b>several periods over time</b>.</li>
+          <li>It runs one study or many, and each new study is just one more row in that setup table.</li>
+        </ul>
+        <span class="gatebadge stop">◼ hard stop if the data fails its quality check</span>
+      </div>
+      <div class="aside">
+        <div class="uses"><div class="cap">Why it matters</div>
+          <span class="tag">Every study starts from the <b>same governed, trusted data</b>.</span>
+          <span class="tag">Change a study by editing <b>one setup table</b>, not code.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PHASE 2 -->
+    <div class="panel" id="e2" role="tabpanel" data-p="2" hidden>
+      <div>
+        <p class="lead">Build the measures each study will use.</p>
+        <p class="what">The outcome measures are built to each study's needs. Cost outcomes are supported today, and the same approach extends to other measures like comorbidity.</p>
+        <ul>
+          <li>Some studies measure spend across <b>several periods</b>; others use a <b>single before-and-after</b> window.</li>
+          <li>The factors that make members comparable (age, risk score, comorbidities, prior use) are built once and reused.</li>
+          <li>Every step logs a <b>pass / fail</b> row with a plain-language note.</li>
+        </ul>
+        <span class="gatebadge stop">◼ hard stop if the measures fail their quality check</span>
+      </div>
+      <div class="aside">
+        <div class="uses"><div class="cap">Why it matters</div>
+          <span class="tag">The <b>same measures, built the same way</b>, every time.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PHASE 3 -->
+    <div class="panel" id="e3" role="tabpanel" data-p="3" hidden>
+      <div>
+        <p class="lead">Make the data trustworthy before any analysis touches it.</p>
+        <p class="what">Gaps are handled, outliers treated, negative dollars set to zero, and categories standardized. Then the cleaned data is saved as the input to the comparison step.</p>
+        <ul>
+          <li>Each check writes a <b>pass / fail</b> row, with the reason, to the run log.</li>
+          <li>A data-quality failure <b>halts the run</b>. Unreliable data never reaches the analysis, so no silently-wrong result reaches a leader.</li>
+        </ul>
+        <span class="gatebadge stop">◼ hard stop, the engine halts and nothing downstream runs</span>
+      </div>
+      <div class="aside">
+        <div class="uses"><div class="cap">Why it matters</div>
+          <span class="tag"><b>Bad data is caught early</b>, before it can skew a result.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PHASE 4 -->
+    <div class="panel" id="e4" role="tabpanel" data-p="4" hidden>
+      <div>
+        <p class="lead">Build a fair comparison group, the heart of a credible evaluation.</p>
+        <p class="what">For each enrolled member, the engine finds statistically comparable non-enrolled members, so the comparison is truly like-for-like. It uses <b>automated model selection</b> to make that match rigorous, not hand-tuned.</p>
+        <ul>
+          <li>The comparison is built the <b>same way across studies</b>, so results line up study to study.</li>
+          <li>If the two groups aren't similar enough to compare fairly, that's a <b>quality-gate failure</b> and the study stops.</li>
+        </ul>
+        <span class="gatebadge stop">◼ hard stop if the groups aren't comparable enough</span>
+      </div>
+      <div class="aside">
+        <div class="uses"><div class="cap">Why it matters</div>
+          <span class="tag">A <b>defensible, like-for-like</b> comparison.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PHASE 5 -->
+    <div class="panel" id="e5" role="tabpanel" data-p="5" hidden>
+      <div>
+        <p class="lead">Measure the real impact, and let the engine correct itself.</p>
+        <p class="what">The engine calculates how much of a difference the program actually made versus the comparison group, and checks that its method fits the data. This step doesn't hard-stop; it <b>self-corrects</b>.</p>
+        <ul>
+          <li>If a statistical check on the method fails, the engine <b>automatically switches to a more suitable method</b>, with no one having to step in.</li>
+          <li>It records which method it used and why, so the result is defensible.</li>
+        </ul>
+        <span class="gatebadge remediate">◆ self-correcting, the engine adapts and keeps going</span>
+      </div>
+      <div class="aside">
+        <div class="uses"><div class="cap">Why it matters</div>
+          <span class="tag">The impact number <b>holds up to scrutiny</b>.</span>
+        </div>
+        <table class="logmini" aria-label="example log rows">
+          <tr><td><span class="st warn">WARN</span></td><td>Statistical check failed, switched methods automatically</td></tr>
+          <tr><td><span class="st pass">PASS</span></td><td>Impact model completed · X measures</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <!-- PHASE 6 -->
+    <div class="panel" id="e6" role="tabpanel" data-p="6" hidden>
+      <div>
+        <p class="lead">Land a standardized scorecard the business can read.</p>
+        <p class="what">Results write to a governed table in a consistent scorecard format - overall and by subgroup - then surface to the dashboards and release notes leaders open. <b>The output is a decision, not a 40-page deck.</b></p>
+        <ul>
+          <li>Release notes translate every metric into <b>plain language</b>, so a non-technical leader can act on it.</li>
+          <li>Same format for every study - <b>comparable across the whole portfolio</b>, and reproducible under one run ID.</li>
+        </ul>
+        <span class="gatebadge good">✓ every step audited · fully traceable · reproducible</span>
+      </div>
+      <div class="aside">
+        <div class="mini" aria-label="example scorecard">
+          <div class="mh">[Study] · X-mo · matched comparison</div>
+          <div class="mb">
+            <div class="mt"><div class="mv good">$X</div><div class="ml">vs. matched control</div></div>
+            <div class="mt"><div class="mv good">p &lt; X</div><div class="ml">significance</div></div>
+            <div class="mt"><div class="mv">X</div><div class="ml">matched 1:1</div></div>
+            <div class="mt"><div class="mv hot">3h 27m</div><div class="ml">run time</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="scale">
+    <div class="sc">and it runs at scale - many studies at once</div>
+    <div class="row">
+      <span class="cfg">load config</span>
+      <span class="to">→</span>
+      <div class="studies">
+        <span class="stub"><b>Study 1</b> · 12mo / 12mo</span>
+        <span class="stub"><b>Study 2</b> · 6mo / 6mo</span>
+        <span class="stub"><b>Study 3</b></span>
+        <span class="stub">…</span>
+        <span class="stub"><b>Study N</b></span>
+      </div>
+      <span class="to">→</span>
+      <span class="stub">each yields its models + scorecard</span>
+    </div>
+    <div class="out">One setup table, studies run in parallel. Change a study's before/after window, or add another study, and it's a <b>setting change, not new code</b> or a new pipeline.</div>
+  </div>
+
+  <p class="nextline"><b>Where this goes next:</b> the same governed foundation extends to forecasting and scenario modeling, so the platform answers new business questions without a new build.</p>
+
+  <div class="built">
+    <div class="cap">Built on Databricks</div>
+    <div class="chips">
+      <span class="chip"><b>One automated pipeline</b></span>
+      <span class="chip"><b>Governed, audited data</b></span>
+      <span class="chip"><b>Automated model selection</b></span>
+      <span class="chip"><b>Self-checking quality gates</b></span>
+      <span class="chip"><b>Complete run log</b></span>
+      <span class="chip"><b>AI-assisted build</b> <span>(Genie)</span></span>
+    </div>
+  </div>
+  </div><!-- /v-how -->
+
+  <!-- ===== VIEW: THE RESULT ===== -->
+  <div class="view" id="v-result" hidden>
+    <p class="sub" style="margin-top:.2em">Start where a leader starts. The output isn't a 40-page deck, it's a <b>decision</b>: every study lands as a standardized scorecard with the headline outcome, the drivers, and a plain-language recommendation, ready to act on without touching a notebook.</p>
+    <div class="card">
+      <div class="hd">
+        <div class="k">Point-Solution Vendor · X-month evaluation · matched comparison</div>
+        <div class="t">[Study name] : Total cost of care vs. a matched control group</div>
+      </div>
+      <div class="bd">
+        <div class="tiles">
+          <div class="tile"><div class="tv good">$X</div><div class="tl">Cost of care vs. matched control</div></div>
+          <div class="tile"><div class="tv">X</div><div class="tl">Treated members, matched 1:1</div></div>
+          <div class="tile"><div class="tv good">p &lt; X</div><div class="tl">Statistical significance</div></div>
+          <div class="tile"><div class="tv hot">3h 27m</div><div class="tl">Total engine run time</div></div>
+        </div>
+        <div class="verdict">
+          <div class="vk">Release notes · in plain words</div>
+          <p>After matching on age, risk score, comorbidities and prior spend, enrolled members cost <b>$X [per member per month]</b> versus comparable non-enrolled members over the X-month performance period, a statistically significant result. <b>Recommendation: [continue / expand / revisit].</b></p>
+        </div>
+      </div>
+    </div>
+    <p class="sub" style="font-size:.82rem">Every figure marked <b>X</b> is a placeholder awaiting the AEE team's confirmed numbers, so nothing unverified goes in front of a VP. A leader asks a follow-up? It's a re-run, not another multi-week analyst cycle.</p>
+  </div>
+
+  <!-- ===== VIEW: WHY YOU CAN TRUST IT ===== -->
+  <div class="view" id="v-trust" hidden>
+    <p class="sub" style="margin-top:.2em">Every phase runs a <b>quality check</b>. Bad data is stopped early; analysis issues are corrected automatically. Every decision is captured in a <b>run log</b> under one run record, so any number is traceable and reproducible.</p>
+    <div class="duo">
+      <div class="fact">
+        <div class="fk hot">Data steps · hard stop</div>
+        <div class="fh">Unreliable data never reaches the analysis</div>
+        <p>Every data step enforces pass/fail criteria. A failure <b>halts the run</b>, so no silently-wrong result reaches a leader.</p>
+      </div>
+      <div class="fact">
+        <div class="fk warn">Analysis · self-correcting</div>
+        <div class="fh">A check fails, the engine adapts</div>
+        <p>If a statistical check fails, the engine <b>automatically switches to a more suitable method</b>, keeps going, and records why.</p>
+      </div>
+    </div>
+    <div class="logwrap">
+      <table class="logt">
+        <thead><tr><th>Step</th><th>Phase</th><th>Status</th><th>What the engine logged</th></tr></thead>
+        <tbody>
+          <tr><td>1c</td><td>Data QC</td><td><span class="st pass">PASS</span></td><td>Members with continuous coverage kept · n = X</td></tr>
+          <tr><td>2f</td><td>Feature engineering</td><td><span class="st pass">PASS</span></td><td>Comorbidity and risk measures built</td></tr>
+          <tr><td>4e</td><td>Matching</td><td><span class="st pass">PASS</span></td><td>Comparison group matched 1-to-1 · X members</td></tr>
+          <tr><td>5a</td><td>Analysis</td><td><span class="st warn">WARNING</span></td><td>Statistical check failed, switched methods automatically</td></tr>
+          <tr><td>5b</td><td>Analysis</td><td><span class="st pass">PASS</span></td><td>Impact model completed · X measures</td></tr>
+          <tr><td>5g</td><td>Scorecard</td><td><span class="st pass">PASS</span></td><td>Scorecard saved and sent to the dashboard</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ===== VIEW: THE STRATEGY ===== -->
+  <div class="view" id="v-strategy" hidden>
+    <p class="sub" style="margin-top:.2em">The payoff isn't only speed. AEE shows what happens when you pair the <b>right AI levers</b> with your experts on the calls that matter, build <b>governance in from day one</b>, and let the engine <b>grow with every study</b> it runs.</p>
+    <div class="trio">
+      <div class="fact">
+        <div class="fk">AI levers · human judgment</div>
+        <div class="fh">Built with AI, decided by your experts</div>
+        <p>We used <b>AI assistance (Genie)</b> and <b>automated deployment (Databricks Asset Bundles)</b> to design, orchestrate, and refine the engine and its front end in a fraction of the usual build time. The decisions that matter stayed with people: <b>which model fits a study</b>, and <b>who counts as a comparable member</b>, remain the call of your analysts and clinical experts.</p>
+      </div>
+      <div class="fact">
+        <div class="fk">Continuous improvement</div>
+        <div class="fh">It compounds as it runs</div>
+        <p>Every study and every new model that runs through AEE <b>widens what it can do next</b>. Adding a study or a method is a setting change, not a rebuild, so the engine keeps extending to new programs and new questions <b>without starting over</b>. Phase 2 brings this discipline to the pipeline itself, so improvements ship safely and repeatedly.</p>
+      </div>
+      <div class="fact">
+        <div class="fk">Governance · transparency</div>
+        <div class="fh">Every decision on the record</div>
+        <p>Governance is <b>built in, not bolted on</b>. Each study produces <b>release notes that capture the key decisions and the reasoning behind them</b>, so any result stays explainable and defensible long after the run, for a regulator, an auditor, or the next analyst.</p>
+      </div>
+    </div>
+    <p class="nextline"><b>Why it resonates at the top:</b> the right AI levers with your experts on the critical calls, an engine that grows with you, and a decision trail you can stand behind.</p>
+  </div>
+
+  <footer>
+    <span class="val"><b>Weeks of expert time, returned to the business</b>, and it scales to 10-20 studies at once, in one auditable format.</span>
+    <span>Numbers marked X are placeholders, pending confirmed figures from the AEE team.</span>
+  </footer>
+</div>
+
+<script>
+  const steps = Array.from(document.querySelectorAll('.step'));
+  const panels = Array.from(document.querySelectorAll('.panel'));
+  const detail = document.querySelector('.detail');
+  function select(n){
+    steps.forEach(s => { const on = s.dataset.step === n; s.setAttribute('aria-selected', on ? 'true' : 'false'); s.tabIndex = on ? 0 : -1; });
+    panels.forEach(p => { p.hidden = p.dataset.p !== n; });
+    detail.dataset.active = n;
+  }
+  steps.forEach(s => s.addEventListener('click', () => select(s.dataset.step)));
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    const cur = steps.findIndex(s => s.getAttribute('aria-selected') === 'true');
+    const next = (cur + (e.key === 'ArrowRight' ? 1 : -1) + steps.length) % steps.length;
+    select(steps[next].dataset.step); steps[next].focus();
+  });
+  select('1');
+
+  /* ---- app tabs (click into views; not a linear deck) ---- */
+  const tabs = Array.from(document.querySelectorAll('.tab'));
+  const views = { how:document.getElementById('v-how'), result:document.getElementById('v-result'), trust:document.getElementById('v-trust'), strategy:document.getElementById('v-strategy') };
+  function showView(name){
+    tabs.forEach(t => t.setAttribute('aria-selected', t.dataset.view === name ? 'true' : 'false'));
+    Object.entries(views).forEach(([k,el]) => { el.hidden = k !== name; });
+  }
+  tabs.forEach(t => t.addEventListener('click', () => showView(t.dataset.view)));
+  showView('result');
+
+  const root = document.documentElement;
+  document.getElementById('themetog').addEventListener('click', () => {
+    root.dataset.theme = (root.dataset.theme === 'dark') ? 'light' : 'dark';
+  });
+</script>
+</body>
+</html>
